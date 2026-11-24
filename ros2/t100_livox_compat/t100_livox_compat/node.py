@@ -431,13 +431,15 @@ class T100LivoxCompatNode(Node):
 
     def destroy_node(self):
         self._stop_event.set()
+        # Let select() exit on its short timeout before closing descriptors;
+        # closing from another thread while select() is active is racy.
+        if hasattr(self, "_receiver_thread"):
+            self._receiver_thread.join(timeout=1.0)
         for sock in self._sockets:
             try:
                 sock.close()
             except OSError:
                 pass
-        if hasattr(self, "_receiver_thread"):
-            self._receiver_thread.join(timeout=1.0)
 
         if self._started_by_node and self.auto_stop_on_exit:
             try:
