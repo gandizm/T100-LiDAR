@@ -109,7 +109,7 @@ PCAP 记录保留 UDP 载荷、接收时间和端点，IPv4/UDP 头由程序重�
 | /livox/lidar | livox_ros_driver2/msg/CustomMsg |
 | /livox/imu | sensor_msgs/msg/Imu |
 
-因此，使用 Livox CustomMsg 的 FAST-LIO2 等下游节点通常可以保持原有订阅配置。注意：这是 ROS 消息接口兼容，不是 SDK2 设备仿真。需要在同一个 ROS 2 工作空间构建官方 Livox ROS Driver 2，以提供 CustomMsg 和 CustomPoint 消息定义，但不需要启动官方 MID360 驱动节点。
+接口同时提供两种官方驱动风格：`xfer_format:=1` 发布 CustomMsg（FAST-LIO2 通常使用此格式，且为默认值）；`xfer_format:=0` 发布官方 Livox PointXYZRTLT PointCloud2 字段布局。注意：这是 ROS 消息接口兼容，不是 SDK2 设备仿真。需要在同一个 ROS 2 工作空间构建官方 Livox ROS Driver 2，以提供 CustomMsg 和 CustomPoint 消息定义，但不需要启动官方 MID360 驱动节点。
 
 ### 编译
 
@@ -134,7 +134,7 @@ ros2 launch t100_livox_compat t100_mid360_compat.launch.py \
   device_ip:=<T100_IP> bind_ip:=<ROS_HOST_IP>
 ```
 
-默认点云发布频率为 10 Hz。检查接口：
+默认点云发布频率为 10 Hz。可用 `xfer_format:=1` 选择 CustomMsg，或 `xfer_format:=0` 选择官方 Livox PointCloud2 格式。检查接口：
 
 ```sh
 ros2 topic info /livox/lidar -v
@@ -145,7 +145,7 @@ ros2 topic echo /livox/imu --once
 ### 兼容范围与当前验证状态
 
 - 当前支持协议文档中的 96 点 Cartesian High 点云包（data_type=1）和单样本 IMU 包（data_type=0）。
-- 点时间偏移沿用 Livox SDK2 / ROS Driver 2 的计算方式：time_interval * 100 / dot_num，单位 ns。多个 UDP 包会组帧为 CustomMsg，使用 uint64 timebase 和 uint32 相对 offset_time。
+- 两种输出格式都沿用 Livox ROS Driver 2 的点字段定义。PointCloud2 使用 x/y/z/intensity/tag/line/timestamp，点步长为官方 26 bytes。点时间偏移沿用 Livox SDK2 / ROS Driver 2 的计算方式：time_interval * 100 / dot_num，单位 ns。多个 UDP 包会组帧为 CustomMsg，使用 uint64 timebase 和 uint32 相对 offset_time。
 - 默认 line_count=4，依据官方 MID360 驱动设置；T100 实际通道编号仍需用真实数据确认。
 - T100 文档中的加速度单位为 g，发布到 ROS sensor_msgs/Imu 前转换为 m/s²；角速度保持 rad/s。
 - 点云和 IMU 时间戳原样转发，以保留设备内部共同时间基准。若 time_type=0，时间为设备启动以来的时间，不是 Unix 时间。

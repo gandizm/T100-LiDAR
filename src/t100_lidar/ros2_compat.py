@@ -4,6 +4,7 @@ The point timing formula intentionally matches Livox ROS Driver 2's
 PubHandler::OnLivoxLidarPointCloudCallback implementation.
 """
 
+import struct
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence, Tuple
 
@@ -91,3 +92,30 @@ def acceleration_g_to_mps2(values: Sequence[float]) -> Tuple[float, float, float
     if len(values) != 3:
         raise ValueError("acceleration must contain exactly three axes")
     return tuple(float(value) * STANDARD_GRAVITY for value in values)
+
+
+POINTCLOUD2_POINT_STEP = 26
+
+
+def pack_pointcloud2_data(batch) -> bytes:
+    """Pack the official Livox ROS Driver 2 PointXYZRTLT layout.
+
+    Fields: x/y/z/intensity float32, tag/line uint8, timestamp float64.
+    The timestamp field carries the absolute per-point timestamp in ns,
+    matching the official driver implementation.
+    """
+    data = bytearray(len(batch) * POINTCLOUD2_POINT_STEP)
+    for index, (_offset_ns, point) in enumerate(batch):
+        struct.pack_into(
+            "<ffffBBd",
+            data,
+            index * POINTCLOUD2_POINT_STEP,
+            float(point.x),
+            float(point.y),
+            float(point.z),
+            float(point.reflectivity),
+            int(point.tag),
+            int(point.line),
+            float(point.timestamp_ns),
+        )
+    return bytes(data)

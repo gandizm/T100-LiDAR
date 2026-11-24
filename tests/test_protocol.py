@@ -11,6 +11,7 @@ from t100_lidar.ros2_compat import (
     LivoxCompatPoint,
     acceleration_g_to_mps2,
     packet_to_livox_points,
+    pack_pointcloud2_data,
     split_livox_batches,
 )
 
@@ -108,6 +109,15 @@ class DataTests(unittest.TestCase):
         self.assertEqual([item[0] for item in batches[0][1]], [0, 100])
         self.assertEqual(batches[1][0], 0xFFFFFFFF + 300)
         self.assertEqual(batches[1][1][0][0], 0)
+
+    def test_pointcloud2_uses_official_livox_pointxyzrtlt_layout(self):
+        point = LivoxCompatPoint(123456789, 1.0, 2.0, 3.0, 80, 7, 2)
+        batch = split_livox_batches([point])[0][1]
+        raw = pack_pointcloud2_data(batch)
+        self.assertEqual(len(raw), 26)
+        x, y, z, intensity, tag, line, timestamp = struct.unpack("<ffffBBd", raw)
+        self.assertEqual((x, y, z, intensity, tag, line), (1.0, 2.0, 3.0, 80.0, 7, 2))
+        self.assertEqual(timestamp, 123456789.0)
 
     def test_imu_acceleration_is_converted_from_g_to_si(self):
         converted = acceleration_g_to_mps2((0.0, -1.0, 1.0))

@@ -14,12 +14,13 @@ import rclpy
 from livox_ros_driver2.msg import CustomMsg, CustomPoint
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, PointCloud2, PointField
 
 from t100_lidar.protocol import ProtocolError, decode_data
 from t100_lidar.ros2_compat import (
     acceleration_g_to_mps2,
     packet_to_livox_points,
+    pack_pointcloud2_data,
     split_livox_batches,
 )
 
@@ -41,6 +42,7 @@ class T100LivoxCompatNode(Node):
         self.declare_parameter("point_port", 60001)
         self.declare_parameter("imu_port", 60003)
         self.declare_parameter("publish_freq", 10.0)
+        self.declare_parameter("xfer_format", 1)
         self.declare_parameter("frame_id", "livox_frame")
         self.declare_parameter("imu_frame_id", "livox_frame")
         self.declare_parameter("topic_prefix", "livox")
@@ -54,6 +56,7 @@ class T100LivoxCompatNode(Node):
         self.point_port = int(self.get_parameter("point_port").value)
         self.imu_port = int(self.get_parameter("imu_port").value)
         self.publish_freq = float(self.get_parameter("publish_freq").value)
+        self.xfer_format = int(self.get_parameter("xfer_format").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
         self.imu_frame_id = str(self.get_parameter("imu_frame_id").value)
         self.topic_prefix = str(self.get_parameter("topic_prefix").value).strip("/")
@@ -71,6 +74,8 @@ class T100LivoxCompatNode(Node):
             raise ValueError("point_port and imu_port must be different")
         if self.publish_freq <= 0:
             raise ValueError("publish_freq must be positive")
+        if self.xfer_format not in (0, 1):
+            raise ValueError("xfer_format must be 0 (PointCloud2) or 1 (Livox CustomMsg)")
         if not 1 <= self.line_count <= 255:
             raise ValueError("line_count must be in the range 1..255")
         if not 0 <= self.lidar_id <= 255:
@@ -81,7 +86,8 @@ class T100LivoxCompatNode(Node):
         prefix = self.topic_prefix
         lidar_topic = f"{prefix}/lidar" if prefix else "lidar"
         imu_topic = f"{prefix}/imu" if prefix else "imu"
-        self.lidar_pub = self.create_publisher(CustomMsg, lidar_topic, qos_profile_sensor_data)
+        lidar_message_type = CustomMsg if self.xfer_format == 1 else PointCloud2
+        self.lidar_pub = self.create_publisher(lidar_message_type, lidar_topic, qos_profile_sensor_data)
         self.imu_pub = self.create_publisher(Imu, imu_topic, qos_profile_sensor_data)
 
         self._lock = threading.Lock()
@@ -125,7 +131,7 @@ class T100LivoxCompatNode(Node):
         self.get_logger().info(
             f"T100 Livox-compatible bridge listening on {self.bind_ip}:"
             f"{self.point_port} (points), {self.bind_ip}:{self.imu_port} (IMU); "
-            f"source={self.device_ip}; topics={lidar_topic}, {imu_topic}"
+            f"source={self.device_ip}; xfer_format={self.xfer_format}; topics={lidar_topic}, {imu_topic}"
         )
 
     def _open_socket(self, port):
@@ -240,23 +246,44 @@ class T100LivoxCompatNode(Node):
             return
 
         for timebase_ns, batch in split_livox_batches(points):
-            msg = CustomMsg()
-            msg.header.frame_id = self.frame_id
-            set_ros_stamp(msg.header.stamp, timebase_ns)
-            msg.timebase = int(timebase_ns)
-            msg.point_num = len(batch)
-            msg.lidar_id = self.lidar_id
+            if self.xfer_format == 1:
+                msg = CustomMsg()
+                msg.header.frame_id = self.frame_id
+                set_ros_stamp(msg.header.stamp, timebase_ns)
+                msg.timebase = int(timebase_ns)
+                msg.point_num = len(batch)
+                msg.lidar_id = self.lidar_id
 
-            for offset_ns, point in batch:
-                custom_point = CustomPoint()
-                custom_point.offset_time = int(offset_ns)
-                custom_point.x = float(point.x)
-                custom_point.y = float(point.y)
-                custom_point.z = float(point.z)
-                custom_point.reflectivity = int(point.reflectivity)
-                custom_point.tag = int(point.tag)
-                custom_point.line = int(point.line)
-                msg.points.append(custom_point)
+                for offset_ns, point in batch:
+                    custom_point = CustomPoint()
+                    custom_point.offset_time = int(offset_ns)
+                    custom_point.x = float(point.x)
+                    custom_point.y = float(point.y)
+                    custom_point.z = float(point.z)
+                    custom_point.reflectivity = int(point.reflectivity)
+                    custom_point.tag = int(point.tag)
+                    custom_point.line = int(point.line)
+                    msg.points.append(custom_point)
+            else:
+                msg = PointCloud2()
+                msg.header.frame_id = self.frame_id
+                set_ros_stamp(msg.header.stamp, timebase_ns)
+                msg.height = 1
+                msg.width = len(batch)
+                msg.fields = [
+                    PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+                    PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+                    PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+                    PointField(name="intensity", offset=12, datatype=PointField.FLOAT32, count=1),
+                    PointField(name="tag", offset=16, datatype=PointField.UINT8, count=1),
+                    PointField(name="line", offset=17, datatype=PointField.UINT8, count=1),
+                    PointField(name="timestamp", offset=18, datatype=PointField.FLOAT64, count=1),
+                ]
+                msg.is_bigendian = False
+                msg.point_step = 26
+                msg.row_step = msg.point_step * msg.width
+                msg.is_dense = True
+                msg.data = pack_pointcloud2_data(batch)
 
             self.lidar_pub.publish(msg)
             with self._lock:

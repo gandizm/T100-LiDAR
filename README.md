@@ -120,7 +120,7 @@ The optional ros2/t100_livox_compat package receives native T100 UDP point-cloud
 | /livox/lidar | livox_ros_driver2/msg/CustomMsg |
 | /livox/imu | sensor_msgs/msg/Imu |
 
-This keeps the usual FAST-LIO2/Livox custom-message subscription contract. It is a ROS-message compatibility bridge, not an SDK2 device emulator: the official Livox ROS Driver 2 package is needed for its generated CustomMsg type, but its MID360 node is not launched.
+This keeps the usual Livox ROS Driver 2 output contract: `xfer_format:=1` publishes `CustomMsg` (the default for FAST-LIO2), while `xfer_format:=0` publishes the official Livox `PointXYZRTLT` PointCloud2 field layout. It is a ROS-message compatibility bridge, not an SDK2 device emulator: the official Livox ROS Driver 2 package is needed for its generated CustomMsg type, but its MID360 node is not launched.
 
 ### Build
 
@@ -145,7 +145,7 @@ ros2 launch t100_livox_compat t100_mid360_compat.launch.py \
   device_ip:=<T100_IP> bind_ip:=<ROS_HOST_IP>
 ```
 
-The bridge publishes at 10 Hz by default. Useful checks:
+The bridge publishes at 10 Hz by default. Set `xfer_format:=1` for Livox CustomMsg or `xfer_format:=0` for the official Livox PointCloud2 layout. Useful checks:
 
 ```sh
 ros2 topic info /livox/lidar -v
@@ -156,7 +156,7 @@ ros2 topic echo /livox/imu --once
 ### Compatibility scope and validation status
 
 - Supported input packets: the documented 96-point Cartesian-high packet (data_type=1) and one-sample IMU packet (data_type=0).
-- Point timing follows the Livox SDK2/ROS Driver 2 calculation: time_interval * 100 / dot_num nanoseconds per point. Points are batched into CustomMsg messages with a uint64 timebase and uint32 relative offset_time.
+- Both output formats follow the Livox ROS Driver 2 point layout. PointCloud2 uses x/y/z/intensity/tag/line/timestamp fields with the official 26-byte packed point step. Point timing follows the Livox SDK2/ROS Driver 2 calculation: time_interval * 100 / dot_num nanoseconds per point. Points are batched into CustomMsg messages with a uint64 timebase and uint32 relative offset_time.
 - The default line_count=4 follows the official MID360 driver setting. Confirm the T100 channel/ring interpretation with real captures before relying on it.
 - T100 acceleration is documented in g and is converted to m/s² for sensor_msgs/Imu; angular velocity remains rad/s.
 - Device timestamps are forwarded unchanged so point and IMU streams retain their common device time domain. In time_type=0, this is the device's since-startup time, not Unix epoch time.
