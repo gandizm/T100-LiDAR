@@ -5,7 +5,7 @@
 ## 0. 设计目标
 
 - 主机：RDK X5、Orange Pi 5B、普通 PC。
-- 主机端：一个标准 USB-C receptacle，作为 USB 设备/UFP；支持 USB-C–USB-C 和 USB-A 3.0–USB-C 线缆。
+- 主机端：固定 USB 3.0 Type-A male pigtail；RDK X5、Orange Pi 5B 直接插 USB-A Host，只有 USB-C 的 PC 使用 USB-C-to-USB-A 3.0 转接头。
 - 雷达端：T100 专用 24Pin Type-C plug，不能当普通 USB-C 使用。
 - 一根 Cat5e 四对双绞线同时传输 100BASE-TX 和 11V 电源。
 - 主机识别为 USB Ethernet 网卡；Linux 侧使用系统 r8152 驱动。
@@ -16,23 +16,20 @@
 ~~~text
 PC / RDK X5 / Orange Pi 5B
           |
-          | USB-C 3.x cable
-          | 或 USB-A 3.0 -> USB-C 3.x cable
+          | USB 3.0 Type-A Host
+          | C-only PC: USB-C -> USB-A 3.0 adapter
           v
 +---------------------------------------------------+
 |             T100 主动转接器（host pod）           |
 |                                                   |
-| USB-C UFP                                         |
+| USB 3.0 Type-A captive plug                       |
 |   |                                               |
-|   +-- CC1/CC2 --> TUSB320LAI --> STM32C011         |
-|   |                   |             |             |
-|   |                   |             +-- SS mux SEL|
-|   |                   |             +-- eFuse ILIM|
-|   |                   |                           |
-|   +-- USB2 D+/D- --------------------+             |
-|   +-- USB3 SS pairs -> HD3SS3212 ----+--> RTL8153B |
-|                                           |       |
-| 5V VBUS -> input eFuse -> +5V_SYS --------+       |
+|   +-- USB2 D+/D- ---------------------------------+
+|   +-- USB3 SuperSpeed pairs ------------------+  |
+|   |                                           |  |
+|   |                                      RTL8153B|
+|   |                                           |  |
+| 5V VBUS -> input eFuse -> +5V_SYS -------------+  |
 |                    |                              |
 |                    +--> TPS61088 boost -> 11V     |
 |                                           |       |
@@ -51,55 +48,34 @@ PC / RDK X5 / Orange Pi 5B
                                   11V + Ethernet -> T100
 ~~~
 
-主机 USB-C 端是标准 USB 设备接口；雷达端 Type-C 是 DJI Agras 定制接口。两端外形相似不代表电气兼容。
+主机端是标准 USB 3.0 Type-A Host；雷达端是 DJI Agras 定制 Type-C。两端外形和电气定义完全不同。
 
-## 2. 主机 USB-C 输入接口
+## 2. 主机 USB 3.0 Type-A 输入
 
-### J1：标准 USB-C receptacle（UFP / Sink）
+### J1：USB 3.0 Type-A male captive cable
 
-- CC1、CC2 接 TUSB320LAI。
-- TUSB320LAI 配置为 UFP；PORT 拉低。
-- ADDR 选择 I2C 模式；MCU 通过 I2C 读取连接方向和电流广告状态。
-- VBUS_DET 按 TI 参考电路通过 887kΩ（标称约 900kΩ）电阻接系统 VBUS。
-- TUSB320LAI 的 VBUS_DET、CC1、CC2 不要直接接到 3.3V GPIO。
-- USB2 D+：J1 A6 与 B6 在连接器附近汇合后接 RTL8153B USB_DP。
-- USB2 D-：J1 A7 与 B7 在连接器附近汇合后接 RTL8153B USB_DM。
-- 四组 SuperSpeed TX/RX 差分线接 HD3SS3212，再由 MCU 根据 TUSB320 的 cable-orientation 状态选择正确方向。
-- VBUS A4/A9/B4/B9 汇合为 VBUS_RAW；GND A1/A12/B1/B12 汇合为 GND。
-- USB2、USB3 数据线在连接器附近布置低电容 ESD 保护。
-- J1 外壳屏蔽脚预留 0Ω / RC 接地配置，不要默认把屏蔽壳与雷达电源地在两端重复硬连接。
+第一版固定采用 USB 3.0 Type-A Host，原因是 RDK X5 和 Orange Pi 5B 都有明确的 USB-A Host 口；两块板的 Type-C 数据接口都不是本项目应该依赖的主机供电口。这样可以删掉主机端 Type-C 的 CC 控制器、SuperSpeed 翻转 MUX 和 MCU，减少器件、固件和故障点。
 
-### U1：TUSB320LAI
+- USB 3.0 Type-A VBUS（5V）接输入 eFuse。
+- USB GND 接板上 GND。
+- USB2 D+/D- 直接接 RTL8153B USB2 数据端。
+- USB3 SuperSpeed TX/RX 四组差分线直接接 RTL8153B。
+- 连接器附近布置 USB2/USB3 低电容 ESD 保护。
+- 使用带 SuperSpeed 线对的 USB 3.0 线缆，不要用只有 USB2 D+/D- 的充电线。
 
-建议工作模式：
-- UFP only；
-- I2C mode；
-- MCU 读取 cable orientation；
-- MCU 读取 default / medium (1.5A) / high (3A) current mode；
-- MCU 控制 HD3SS3212 的 SEL；
-- MCU 根据当前电流广告设置输入 eFuse 限流。
+RDK X5：使用 USB 3.0 Type-A Host。它的 USB Type-C QuickLink 是 USB2 Device（ADB/Fastboot 等），另一个 Type-C 是整板 5V/5A 电源输入，不要把它们当作外设 Host 口。
 
-TUSB320LAI 不是 USB PD 控制器：它不会请求 9V/12V PDO，也不会把 VBUS 升到 9V。它只检测 Type-C CC 电流广告。USB-C 源若广告 1.5A/3A，可据此提高 5V 输入预算。
+Orange Pi 5B：使用 USB 3.0 Type-A Host。其 5V/4A Type-C 是整板电源输入；中间的 Type-C 数据口用于设备连接/烧录等，不把它作为本版的供电 Host 口。
 
-### U2：HD3SS3212
+普通 PC：优先 USB 3.0 Type-A；如果只有 USB-C，使用支持 USB 3.x 的 USB-C-to-USB-A adapter。该适配方式通常按 USB 3.x legacy 供电预算工作，不会自动取得 USB-C 1.5A/3A 电流广告。
 
-用于 USB 3.x Type-C 正反插 SuperSpeed lane 翻转。USB2 D+/D- 不经过该 MUX。按 TI 参考设计连接四组 SuperSpeed 差分通道，MUX 靠近 J1，差分线短且阻抗连续。
+### 输入电流限制
 
-### U3：STM32C011F4P6（或等价小 MCU）
+不使用 TUSB320/PD 控制器。输入 eFuse 预留两个硬件档位：
+- GENERIC：0.90A，适用于标准 USB 3.x Type-A Host；
+- RDK：1.00A，仅在 RDK X5 已确认的 1A USB3 端口使用。
 
-职责仅限于：
-1. 初始化并读取 TUSB320；
-2. 设置 HD3SS3212 方向；
-3. 选择输入 eFuse 电流限制档位；
-4. 控制 boost EN 和状态 LED；
-5. 监控 eFuse FAULT / POWER-GOOD。
-
-建议限流档位：
-- Type-C default：0.90A（USB 3.x default-current 档）；
-- Type-C 1.5A advertisement：1.30A；
-- Type-C 3A advertisement：1.50A（本板不需要取满 3A）。
-
-若使用 USB-A 3.0 -> USB-C 3.x 线缆，TUSB320 会看到 legacy/default-current 档。USB 3.0 SuperSpeed 必须实际建立；USB2-only 线缆或 USB2-only 主机不在本设计的供电保证范围内。
+通过 0Ω 电阻/焊桥选择档位，禁止把 1A 档当作所有 PC USB-A 口的默认设置。USB2.0 Host（500mA 档）不支持本方案的单线供电。
 
 ## 3. USB Ethernet 芯片
 
@@ -142,7 +118,7 @@ RJ45 J2 必须是**无内置磁性器件的普通 8P8C 插座**。数据对通�
 - FAULT / POWER-GOOD 输出；
 - ILIM 档位由 MCU 根据 TUSB320 current-mode detection 选择。
 
-电流限值先按 0.90A / 1.30A / 1.50A 三档设计。最终 ILIM 电阻按实际订购的 TPS25947xx 数据手册/计算器确定，不要从其他 TPS2594x 型号照抄。
+电流限值通过 0Ω 档位选择：GENERIC 0.90A、RDK 1.00A。最终 ILIM 电阻按实际订购的 TPS25947xx 数据手册/计算器确定，不要从其他 TPS2594x 型号照抄。
 
 ### U6：TPS61088 同步 Boost
 
@@ -217,18 +193,17 @@ A4、A8、A5、A9 不接。不要把旧版图片中 PPS/GPS/IO 的冲突定义�
 
 ## 7. 主机兼容性与供电预算
 
-T100 上游实测约 11V × 0.345A = 3.80W。仅雷达本身在 90% boost 效率下，就需要约 0.84A 的 5V 输入；再加 RTL8153B、MCU、MUX 和损耗，整机输入可能接近 0.9–1.0A，启动峰值尚未测量。
+T100 上游实测约 11V × 0.345A = 3.80W。仅雷达本身在 90% boost 效率下，就需要约 0.84A 的 5V 输入；再加 RTL8153B 和转换损耗，整机输入可能接近 0.9–1.0A，启动峰值尚未测量。
 
 因此：
-- USB-C 主机若在 CC 上广告 1.5A/3A，供电余量更充足；
 - USB 3.0 Type-A 的标准 900mA 供电档可能处于临界区；
 - RDK X5 的 USB 3.0 Type-A 端口标称约 5V/1A，仍需实测整机启动电流；
 - Orange Pi 5B 的板级 5V/4A 电源输入不等于每个 USB 端口都能输出 4A，必须实测其 USB host 端口；
 - USB 2.0 host（500mA 档）不在单线供电保证范围内。
 
-本设计能让三类主机使用同一套线缆/模块，但**不能保证任何一个 USB 口都能提供足够的 5V 功率**。若主机只给 500mA，物理上就无法稳定输出 3.8W 雷达功耗。输入 eFuse 应在供电不足时限流/关断，而不是让主机 USB 口反复掉电。
+本设计能让三类主机使用同一套线缆/模块，但**不能保证任何一个 USB 口都能提供足够的 5V 功率**。RDK X5 的 USB3 口标称 1A；Orange Pi 5B 的 USB 端口单口输出电流没有在手册中明确给出；普通 PC USB3-A 通常是 900mA 档。若主机只给 500mA，物理上就无法稳定输出 3.8W 雷达功耗。输入 eFuse 应在供电不足时限流/关断，而不是让主机 USB 口反复掉电。
 
-预留一个不装连接器的 5V_AUX 测试焊盘和反灌隔离位置，正常一线通不接；仅用于台架定位供电不足问题。
+预留一个不装连接器的 5V_AUX 测试焊盘和反灌隔离位置，正常一线通不接；仅用于台架定位供电不足问题。若普通 PC USB3-A 不能稳定供电，下一版再做 USB-C UFP 直接输入（增加 TUSB320 + SuperSpeed MUX），利用源端 1.5A/3A current advertisement；这不是第一版的必需器件。
 
 ## 8. 接地与隔离注意
 
