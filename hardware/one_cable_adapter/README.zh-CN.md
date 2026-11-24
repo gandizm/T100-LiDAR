@@ -1,203 +1,191 @@
-# T100 主动一线通：20 元 USB-C 百兆网卡 + USB 3.0 Hub 方案（Rev A）
+# T100 接口转接板 + 外部授时/相机同步（Rev A）
 
-> **这是当前最简、最便宜的原型路线。** 直接购买图示的 USB-C「百兆网卡 + USB 3.0 Hub」四合一模块，不再另买 RTL8153 网卡。它已经包含 USB Hub 控制器、USB Ethernet 网卡和 RJ45。另配 5V→11V 升压模块、一个极简 RJ45 备用线对供电注入板，以及 T100 专用网线。  
->
-> 重要：图示模块只有 USB-C 上游插头，没有独立 DC/PD 供电输入，因此先按**总线供电（bus-powered）**处理。USB 口能否同时承担 Hub、网卡和 T100 的功耗，是本方案的首要验证项。
+> 设计目标：复用已购买的 24Pin Type-C 全引出板和现成 USB-C HUB/USB 网卡。自制 PCB 不再包含 USB 网卡、PoE、双 RJ45 注入器或 DC-DC 升压器；它只是一块小型载板：两排排针插座 + 一个 RJ45 + 一个 DC 输入 + 可选时间同步排针。
 
-## 1. 图示模块能做什么？
-
-图示产品标注：
-- USB-C 上游接口；
-- 3 个 USB 3.0 Type-A 下游接口；
-- 1 个 RJ45 百兆网口；
-- USB 侧最高标称 5Gbps。
-
-注意：**5Gbps 是 USB Hub 总线速率，不是 RJ45 网口速率。** RJ45 是 100Mbps。T100 使用 100BASE-TX，因此百兆网口足够，不需要千兆网卡。
-
-图中没有看到独立 DC 输入或 USB-C PD 输入。不能假设它能从主机取得 1.5A/3A，也不能假设三个 USB-A 口各自都能输出 900mA。Hub、Ethernet 芯片和下游 USB 设备共用上游供电预算。
-
-买回来先检查实际 USB 网卡芯片和 Linux 驱动：
-~~~bash
-lsusb
-ip -br link
-sudo ethtool -i <网卡接口名>
-sudo ethtool <网卡接口名>
-~~~
-确认它在 RDK X5、Orange Pi 5B、普通电脑上都能正常枚举，并且 RJ45 能与 T100 协商到 100Mbps Full Duplex。不同批次可能换芯片，不要只按外观推断芯片型号。
-
-## 2. 最简系统结构
+## 1. 实际结构
 
 ~~~text
-RDK X5 / Orange Pi 5B / PC
-          |
-          | USB-C upstream cable
-          v
-+--------------------------------------+
-| 约 ¥20 USB-C 百兆网卡 + USB3 Hub      |
-|                                      |
-| USB Hub controller + 100M Ethernet NIC|
-|                                      |
-| 3x USB-A 3.0（本项目暂时不用）         |
-| RJ45（100BASE-TX）                   |
-+--------------------------------------+
-          |
-          | RJ45 data 1/2/3/6
-          v
-+--------------------------------------+
-| 极简 RJ45 被动供电注入板               |
-|                                      |
-| 输入侧 1/2/3/6 -> 输出侧 1/2/3/6       |
-| 输入侧 4/5/7/8 -> 完全不连接           |
-| 输出侧 4/5 -> +11V                   |
-| 输出侧 7/8 -> GND                    |
-+--------------------------------------+
-          |
-          | 一根 Cat5e T568B 四对线
-          v
-T100 专用 Type-C A 面
-  100BASE-TX + 11V
-
-5V 电源 -> 5V/11V Boost -> 注入板输出侧
+USB-C HUB / USB Ethernet
+       |
+       | ordinary Ethernet patch cable
+       v
++-----------------------------------+
+|       T100 Adapter Carrier        |
+|                                   |
+| J1: 2x12 socket headers           |<-- plugs onto purchased 24-pin breakout
+| J2: plain RJ45 jack (NO magnetics)|<-- Ethernet to HUB
+| J3: DC barrel input               |<-- 11V regulated input
+| J4: optional sync header          |<-- PPS / GNSS UART / camera trigger
++-----------------------------------+
+       |
+       v
+T100 24-pin custom Type-C receptacle
 ~~~
 
-## 3. 最少需要购买什么？
+HUB USB 3.0 downstream port can feed a separate USB 5V-to-11V boost cable if its actual per-port current budget is sufficient. That boost cable's DC plug goes to J3. The adapter PCB itself does not perform boost conversion.
 
-| 项目 | 用途 | 备注 |
+## 2. J1: mate with the purchased 24-pin breakout
+
+Use two 1x12 female socket rows (or the exact matching connector system used by the purchased breakout). **Do not assume the row pitch/spacing from a generic USB-C footprint**: measure the actual breakout board and copy its two-row pin spacing, row order, pin-1 marker, and board outline.
+
+Map the breakout's labeled A-side contacts as follows:
+
+| Breakout pin | Carrier net | Destination |
 |---|---|---|
-| USB-C 百兆网卡 + USB3 Hub | USB Ethernet 接入 | 用户提供的约 ¥20 模块 |
-| 5V→11V 升压模块 | T100 供电 | 连续输出至少 11V/0.5A，建议有更大余量 |
-| 两个 RJ45 8P8C breakout | 制作注入板 | 每个 8 个针脚独立引出 |
-| Cat5e 纯铜网线 | 数据 + 电源 | 24AWG，先 1–3m |
-| T100 专用 Type-C 插头/线束 | 雷达端连接 | 严格按 A 面针脚 |
-| USB 电压/电流表 | 测试供电余量 | 建议先借用 |
+| A10 | ETH1_P | J2 pin 1 |
+| A11 | ETH1_N | J2 pin 2 |
+| A2 | ETH2_P | J2 pin 3 |
+| A3 | ETH2_N | J2 pin 6 |
+| A6 | VIN_IN | J3 positive via F1/reverse protection |
+| A7 | VIN_IN | J3 positive via F1/reverse protection |
+| A1 | GND | J3 negative |
+| A12 | GND | J3 negative |
+| A4 | T100_PPS | optional J4 PPS branch |
+| A8 | T100_GPS_RX | optional, isolated by solder bridge |
+| A5/A9 | NC | no connection |
 
-第一版不需要自制 USB 网卡、不需要 RTL8153B 裸芯片、不需要 USB Hub 控制器，也不需要自制完整 PCB。
+The B-side row should have separate footprints/pads for mechanical mating, but leave all B-side signals unconnected on the carrier unless a future verified pinout requires them. The T100 internal continuity measurements in the imported project mean the carrier must not short A/B counterparts together.
 
-## 4. 5V 取电：不要默认主机 USB 口够用
+## 3. J2: RJ45 network
 
-上游工程记录的 T100 实测工作点约 11V、0.345A：
+Use a plain 8P8C/RJ45 connector **without integrated Ethernet magnetics**. The USB Ethernet adapter/HUB already contains the PHY and magnetics; adding another MagJack would insert a second transformer and break the Ethernet path.
 
-`P_T100 = 11 × 0.345 = 3.795 W`
+| RJ45 pin | Signal | T100 A-side |
+|---:|---|---|
+| 1 | ETH1 pair | A10 |
+| 2 | ETH1 pair | A11 |
+| 3 | ETH2 pair | A2 |
+| 6 | ETH2 pair | A3 |
+| 4, 5, 7, 8 | unused | NC |
 
-假设 Boost 效率 90%，仅 T100 就需要：
+Use 100-ohm differential routing for the two Ethernet pairs, keep each pair tightly coupled, and route directly from J1 to J2. Do not add PHY, transformer, Bob-Smith network, PoE injection, or termination resistors.
 
-`I_5V = 3.795 / (5 × 0.90) ≈ 0.844 A`
+## 4. J3: DC power
 
-假设效率 85%，则约 0.893A。这里还没有计入 USB Hub 控制器、百兆网卡和启动峰值。因此，**标准 USB 3.x 默认 900mA 的供电预算基本没有余量，实际很可能不够。**
+J3 is only a DC input. Its barrel dimensions must match the purchased boost cable (measure 5.5x2.1 vs 5.5x2.5 mm; do not guess).
 
-USB-IF 对标准 USB 3.0 下游端口规定的外围设备最大电流为 900mA；USB Type-C 另有 1.5A / 3A 电流广告机制，但 Sink 必须通过 CC 识别并遵守主机所广告的电流，不能仅凭插头是 Type-C 就假设有 1.5A 或 3A。
+~~~text
+J3 DC+
+  -> F1 fuse
+  -> reverse-polarity protection
+  -> VIN_IN -> A6 and A7
 
-图示约 ¥20 Hub 没有独立供电口，且芯片/电流广告能力未知，所以第一版建议分两步：
+J3 DC-
+  -> GND -> A1 and A12
+~~~
 
-### A. 先验证能否单 USB-C 供电
+The T100 measured operating point is approximately 11V / 0.345A (3.8W); this is not a verified full input range or startup peak. Set the boost output to 11.0V for initial bench testing. Do not apply a nominal 12V rail directly until the allowed input range is verified.
 
-1. 暂时不接升压模块和 T100，只连接 Hub。
-2. 用 USB 功率计测 Hub 空载电流。
-3. 再接 T100，但先用独立实验电源给 T100 供 11V，只走 Ethernet 数据，验证网卡和点云。
-4. 最后才尝试从 Hub 上游 VBUS/GND 分出 5V 给 Boost，并监测 USB 电压、电流及 Hub 是否掉线。
-5. 如果主机 USB-C 端口明确广告 1.5A/3A，且 Hub 能正确识别并允许相应功率，才考虑单线供电。
+Suggested placeholders:
+- F1: footprint for a 0.75–1A fuse, final value based on measured startup current;
+- reverse protection: ideal-diode MOSFET footprint preferred; Schottky diode only if its voltage drop is acceptable;
+- C1: 100uF / 25V near J3;
+- C2: 100nF near the Type-C breakout power pins;
+- test pads: VIN_IN and GND.
 
-不要从 Hub 的三个下游 USB-A 口并联取电，不要用双 USB-A Y 线，不要绕过主机过流保护。
+## 5. J4: optional external time synchronization
 
-### B. 如果供电不足，最小兜底
+Keep this optional and do not block the basic Ethernet + DC board on it.
 
-让 Hub 继续由主机 USB-C 供电并传输数据；Boost 单独使用一个稳定的 5V/2A 电源（或从 RDK/Orange Pi 主电源的 5V 大电流母线经保护取电）。这样 T100 端仍然只需要一根 Cat5e 线，主机到 Hub 也仍然只有一个 USB 数据连接；只是主动模块附近多一根供电输入。
+Suggested 1x4 header:
 
-不要把外部 5V 电源直接并联到 Hub 的 USB-C VBUS，否则可能反向给主机供电。Boost 的电源输入应独立走线，并做好反灌隔离。若从主机板的 5V 系统电源取电，先确认板级电源入口、保险和地线连接，不能把 USB Host 的 VBUS 当成主电源母线。
+| J4 pin | Net | Direction / use |
+|---:|---|---|
+| 1 | PPS_3V3_IN | external GNSS 3.3V PPS; fan out to T100 A4 and STM32 timer-capture input |
+| 2 | GNSS_TX_3V3 | GNSS NMEA UART output; optional path to T100 A8 through SJ1 |
+| 3 | CAM_FRAME_SYNC_1V8 | frame trigger generated by STM32 timer, level-shifted to camera 1.8V |
+| 4 | GND | common signal reference |
 
-## 5. 升压模块
+SJ1 should be an unpopulated solder jumper between GNSS_TX_3V3 and T100 A8. The T100 A8 GPS message input is explicitly marked unverified in the Akiyama project. Do not connect it permanently until the exact UART voltage, baud, message format and timing have been verified on the physical unit.
 
-选择现成可调 Boost 模块，先不要自画 TPS61088：
-- 输入：5V；
-- 输出：调到 11.0V；
-- 连续输出：至少 0.5A，最好标称 1A 且有足够散热；
-- 输入侧：实际能承受约 1.2–1.5A 或更高，按效率和启动峰值核实；
-- 有软启动、限流、过温保护更好。
+T100 A4 is documented in the Akiyama pinout as a 3.3V PPS input. Treat it as an input, not an output. Do not connect A4 to the camera sync input as though T100 were generating a PPS output.
 
-不要仅凭商品写的“2A/3A”判断连续输出能力；很多小板标注的是开关峰值电流。MT3608 小模块不作为首选，除非实测在 5V 输入、11V 输出、0.5A 负载下温升和输出纹波都合格。
+### Recommended timing topology
 
-先用台式电源和电子负载测：
-1. 5V 输入下空载输出是否稳定；
-2. 11V/0.35A 持续输出；
-3. 11V/0.5A 持续输出；
-4. 冷启动和负载突变；
-5. 模块温升。
+~~~text
+GNSS receiver
+  |-- 3.3V PPS (1 Hz) --------------------> T100 A4
+  |-- PPS -------------------------------> STM32F407 timer input capture
+  |-- NMEA UART TX (optional/unverified) -> T100 A8 via SJ1
+  |-- NMEA UART TX ----------------------> STM32F407 UART RX
 
-T100 启动峰值尚未测量，不能把 0.345A 稳态值直接当作限流阈值。
+STM32F407 timer
+  |-- disciplines frame schedule from PPS
+  |-- generates 30/60/other configured camera frame pulses
+  v
+1.8V level translation
+  |
+  v
+Depth camera external frame-sync input
+~~~
 
-## 6. RJ45 注入板接线
+A 1Hz PPS is not the same as a 30/60/90Hz camera frame trigger. Do not simply wire the 1Hz PPS to the camera and expect every frame to be synchronized. The STM32 should capture the PPS edge and generate a periodic camera trigger at the configured depth frame rate, phase-locked to the PPS-derived timebase.
 
-使用两个普通 RJ45 8P8C breakout（每个触点独立引出），不需要 PHY、不需要变压器、不需要 PoE 控制芯片。
+For a RealSense D435i, the official D400 datasheet identifies the 9-pin external sensor sync connector as JST SM09B-SRSS-TB(LF)(SN). Pin 5 is Z_VSYNC / Depth VSYNC and pin 9 is GND. The D435i supports external triggering of the depth sensor only; RGB is not externally triggered by this connector. The RealSense multi-camera guide specifies a 100us positive pulse at the configured nominal frame rate and 1.8V CMOS input. Therefore use a proper 3.3V-to-1.8V level translator (or validated divider/buffer) from the STM32 output; do not drive the camera sync input with 3.3V directly.
 
-### 数据直通
+Do not use D435i connector pins 6/7 (LASER_PWM0/1) as the frame-sync input. They are laser-control signals, not the documented depth frame trigger. The external sync connector pin 5 is the relevant depth-frame sync signal.
 
-| Hub 侧 RJ45 输入 | T100 侧 RJ45 输出 | 处理 |
-|---:|---:|---|
-| 1 | 1 | 直通 |
-| 2 | 2 | 直通 |
-| 3 | 3 | 直通 |
-| 6 | 6 | 直通 |
-| 4 | 不连接 | 输入侧备用线对隔离 |
-| 5 | 不连接 | 输入侧备用线对隔离 |
-| 7 | 不连接 | 输入侧备用线对隔离 |
-| 8 | 不连接 | 输入侧备用线对隔离 |
+If the camera is an Orbbec/Insight model rather than D435i, do not reuse the D435i pinout or 1.8V trigger assumption. Check that exact model's external sync specification first.
 
-### 雷达侧电源注入
+## 6. What the two T100 open-source projects actually implement
 
-- 输出 RJ45 4、5 并联接 Boost +11V；
-- 输出 RJ45 7、8 并联接 Boost GND；
-- 输出端预留保险/限流和电容；
-- Hub 侧 RJ45 的 4、5、7、8 不接电源，必须保持悬空。
+### AkiyamaYukina/mid360_agras_t100_lidar_driver
 
-**绝对不要把 11V 直接注入 Hub 自己的 RJ45 插座。** 这块注入板的作用就是让 Hub 内部网卡的磁性器件、中心抽头和保护网络完全不接触 11V。普通网卡不是 PoE 注入器，不能把“百兆只用两对”当作可以直接向备用线对灌电的理由。
+- Documents A4 as a 3.3V PPS input and A8 as GPS message input.
+- Explicitly says A8 GPS message input is unverified.
+- Its current C++ ROS 2 node maps the LiDAR boot-time clock to host system time using one offset sampled at the first packet (and again after LiDAR restart).
+- It does not implement the PPS/GPS hardware synchronization path.
 
-这不是 IEEE PoE。雷达侧 RJ45 是专用 11V 接口，不能插普通电脑、交换机、路由器或标准 PoE 设备。
+### sdcnm/T100-LiDAR
 
-## 7. T568B 网线到 T100 Type-C A 面
+- Documents data packet time_type: 0 = boot-time base, 1 = PTP, 2 = GPS.
+- Defines a 00/68 external time-reference frame with payload channel u8 + timestamp u64, timestamp in microseconds.
+- The reference explicitly does not define complete ACK/synchronization conditions. The CLI frame time-sync constructs a frame; that is not proof that the device accepts it or enters GPS/PTP lock.
+- The project does not implement an end-to-end GNSS PPS + NMEA hardware synchronization driver.
 
-使用 Cat5e 纯铜 24AWG。按导入工程的新 A 面图：
+The standard Livox Mid-360 GPS synchronization documentation describes PPS plus GPRMC/GNRMC time information, but that is a reference for the Livox product family and must not be assumed to prove the T100's A8 format or behavior. Validate T100 time_type and actual timestamp behavior on the device.
 
-| RJ45 针脚 | T568B 颜色 | 用途 | T100 A 面 |
-|---:|---|---|---|
-| 1 | 橙白 | Ethernet | A10 |
-| 2 | 橙 | Ethernet | A11 |
-| 3 | 绿白 | Ethernet | A2 |
-| 6 | 绿 | Ethernet | A3 |
-| 4 | 蓝 | +11V | A6 |
-| 5 | 蓝白 | +11V | A7 |
-| 7 | 棕白 | GND | A1 |
-| 8 | 棕 | GND | A12 |
+## 7. Important distinction: frame sync vs absolute timestamp sync
 
-A4、A8、A5、A9 不接。只按 T100 Type-C A 面制作，不要把 A/B 两面重复短接。做完先逐芯测导通、短路和极性，再连接雷达。
+Hardware-triggering the camera aligns its depth acquisition events to the STM32-generated trigger schedule. It does not automatically make the camera's reported timestamps UTC/GPS time.
 
-## 8. 主机端兼容
+For accurate LiDAR-camera fusion:
+1. GNSS PPS anchors the STM32 timer to the GNSS second.
+2. STM32 records PPS edge time and camera trigger sequence numbers.
+3. Camera runs as an external-sync slave; record frame counter and timestamp domain.
+4. T100 must demonstrably enter GPS/PTP time mode (for example, observe time_type=2 if the device reports it).
+5. Calibrate fixed trigger-to-exposure delay and camera timestamp offset using a scope/LED test or a repeatable optical event.
+6. Keep the raw sensor timestamps and trigger sequence; do not replace them with host packet-arrival timestamps.
 
-- RDK X5：优先使用 USB 3.0 Type-A Host；Hub 若是 USB-C 公头，需要支持 SuperSpeed 的 USB-A 母转 USB-C 公转接头/短线。RDK X5 的 USB-C QuickLink 不能简单当作 USB Host。
-- Orange Pi 5B：优先使用 USB 3.0 Type-A Host；同样使用真正支持 USB 3.x SuperSpeed 的转接头。
-- 普通电脑：USB-C Host 可直接连接；USB-A Host 用 SuperSpeed 转接头。
+## 8. PCB scope and layout
 
-如果使用 USB-A Host，默认 USB 3.x 供电预算仍然只有 900mA；不要因 Hub 另一端是 USB-C 就误以为自动获得 1.5A/3A。
+The carrier should contain only:
+- J1: two rows of 12 female sockets matching the purchased breakout;
+- J2: one plain, non-magnetics RJ45;
+- J3: one DC barrel input;
+- J4: optional 1x4 sync header;
+- F1, reverse-polarity protection, C1/C2, optional SJ1, and test pads.
 
-## 9. 首次测试顺序
+No USB NIC, USB HUB, Ethernet PHY, magnetics, DC-DC boost converter, PoE circuit, or onboard MCU.
 
-1. Hub 单独连接主机：确认三个 USB-A Hub 功能、RJ45 网卡枚举和 Linux 驱动。
-2. 网卡 RJ45 连接 T100，但 T100 用独立实验电源供电：确认 100Mbps Full Duplex 和 UDP 60001/60003 连续收包。
-3. 升压模块单测：确认 11.0V 输出及 0.35A/0.5A 负载下温升。
-4. 注入板单测：Hub 侧备用针脚与电源完全不通；雷达侧 4/5 为 +11V，7/8 为 GND。
-5. 限流接入 T100：先测启动峰值和稳态电流。
-6. 用 USB 功率计检查主机是否掉压、Hub 是否重枚举、网卡是否掉线。
-7. 最后做 1–3m、5m 网线的压降和丢包测试。
+Keep Ethernet pairs short and 100-ohm differential. Keep the DC input and protection away from the Ethernet pair routing. Put J4 near the edge for easy access to the STM32 and camera sync cable.
 
-## 10. 当前结论
+## 9. Bring-up checklist
 
-**最便宜的第一版就是：20 元 Hub + 5V/11V Boost + 双 RJ45 breakout 注入板 + Cat5e + T100 专用 Type-C 线。**
+1. Verify the breakout pin numbering and 2x12 header orientation with a continuity meter.
+2. With no T100 connected, check RJ45 1/2/3/6 map to the correct A-side pins and that RJ45 4/5/7/8 are NC.
+3. Check DC polarity and measure 11.0V at A6/A7 relative to A1/A12 before connecting the LiDAR.
+4. Connect the T100 and verify 100BASE-TX link and UDP point/IMU reception.
+5. With an oscilloscope, verify PPS voltage and edge at T100 A4.
+6. Verify whether T100 A8 accepts the GNSS NMEA format; leave SJ1 open until confirmed.
+7. For D435i, verify 1.8V positive 100us frame pulses at sync connector pin 5, pin 9 ground, and configure the camera as an external-sync slave.
+8. Confirm actual T100 time_type and camera frame-counter/trigger correspondence before claiming hardware time alignment.
 
-若 USB-C 主机端能提供并广告足够的 5V 电流，Boost 可以尝试从上游 VBUS 取电，实现真正的一线供电。若不够，则从主机板主电源或外部 5V/2A 电源给 Boost 供电；数据仍通过 Hub，T100 端仍然只有一根网线。
+## 10. References
 
-## 11. 参考
-
-- [T100 A 面引脚图](../../integrations/mid360_agras_t100_lidar_driver/docs/images/pinout.zh-CN.png)
-- [T100 协议与实测记录](../../integrations/mid360_agras_t100_lidar_driver/docs/protocol.zh-CN.md)
-- [USB-IF：标准 USB 外设电流限制](https://compliance.usb.org/index.asp?UpdateFile=Policies)
-- [USB-IF：Type-C VBUS current detection and usage](https://www.usb.org/sites/default/files/USB%20Type-C%20Spec%20R2.0%20-%20August%202019.pdf)
-- [Microchip：Ethernet magnetics and PoE center-tap design](https://ww1.microchip.com/downloads/en/AppNotes/VPPD-01740.pdf)
+- [Akiyama T100 pinout and protocol](../../integrations/mid360_agras_t100_lidar_driver/docs/protocol.zh-CN.md)
+- [Akiyama T100 ROS node](../../integrations/mid360_agras_t100_lidar_driver/ros2_ws/src/mid360_agras_ros/src/mid360_agras_node.cpp)
+- [sdcnm T100 protocol reference](https://github.com/sdcnm/T100-LiDAR/blob/main/docs/protocol.zh-CN.md)
+- [RealSense D400 datasheet](https://www.intelrealsense.com/wp-content/uploads/2022/11/Intel-RealSense-D400-Series-Datasheet-November-2022.pdf)
+- [RealSense D400 multi-camera hardware synchronization guide](https://dev.realsenseai.com/docs/multiple-depth-cameras-configuration/)
+- [Livox GPS time synchronization reference](https://livox-wiki-cn.readthedocs.io/zh-cn/latest/tutorials/new_product/common/time_sync.html) — reference only; T100 behavior must be independently validated.
