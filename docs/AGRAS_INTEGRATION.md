@@ -3,9 +3,9 @@
 ## 导入来源
 
 - 上游仓库：https://github.com/AkiyamaYukina/mid360_agras_t100_lidar_driver
-- 导入提交：\`492b4a237741a051f6cd0eb118dabd4e1b756e90\`
+- 导入提交：`492b4a237741a051f6cd0eb118dabd4e1b756e90`
 - 上游提交日期：2026-11-24
-- 导入位置：\`integrations/mid360_agras_t100_lidar_driver/\`
+- 导入位置：`integrations/mid360_agras_t100_lidar_driver/`
 - 导入策略：保留完整目录结构、README、协议文档、图片、脚本、C++ 驱动、ROS 2 工作区和第三方许可证；不把上游代码改写成根目录 Python 包的一部分。
 
 ## 为什么采用这个工程作为主路线
@@ -19,11 +19,11 @@
 5. 网络设置、360° FOV/ROI 工具、建图录制与地图导出；
 6. Windows 实时点云与 PCD 查看器。
 
-因此后续以该 C++/ROS 2 路线为主；根目录 Python 工具作为协议研究和交叉验证工具保留。根目录旧的 \`ros2/t100_livox_compat\` 是实验性 Python 桥接，不应和导入工程的 C++ ROS 节点混为一谈。
+因此后续以该 C++/ROS 2 路线为主；根目录 Python 工具作为协议研究和交叉验证工具保留。根目录旧的 `ros2/t100_livox_compat` 是实验性 Python 桥接，不应和导入工程的 C++ ROS 节点混为一谈。
 
 ## 重要接线定义变化
 
-导入工程的 A 面针脚图（\`integrations/mid360_agras_t100_lidar_driver/docs/images/pinout.zh-CN.png\`）将 PPS 标为 A4、GPS 报文标为 A8，A5/A9 标为 NC。这与此前对话中用户提供的另一张 24Pin 图存在冲突。
+导入工程的 A 面针脚图（`integrations/mid360_agras_t100_lidar_driver/docs/images/pinout.zh-CN.png`）将 PPS 标为 A4、GPS 报文标为 A8，A5/A9 标为 NC。这与此前对话中用户提供的另一张 24Pin 图存在冲突。
 
 在本仓库中，主 README 以新导入工程的 A 面图作为当前工作基准，并明确保留冲突提示。任何自制 PCB 在上电前都应按实物插头方向、A/B 面和万用表连通性再次确认；不应把两张图的针脚定义拼接使用。
 
@@ -34,7 +34,7 @@
 - 不声称已经在 RDK X5 / Orange Pi 5B 上跑通；
 - 不声称高速无人机或强振动环境下定位可靠；
 - 不把 11V / 0.345A 的工作点当成额定输入范围；
-- 不把 \`roi_en\` 的回读值单独当作 360° 解锁成功证明；
+- 不把 `roi_en` 的回读值单独当作 360° 解锁成功证明；
 - PTP/GPS 时间模式、真实点时间、tag 语义、IMU 轴向和外参仍要在实际设备上核验。
 
 ## 后续开发建议
@@ -48,4 +48,4 @@
 
 ## 文件与许可
 
-导入子工程保留上游 GPL-2.0 LICENSE；其中 Livox 消息定义保留 MIT LICENSE.txt；FAST-LIO / ikd-Tree 的第三方来源见子工程 \`docs/SOURCE.md\`。根目录 Python 工具仍使用 T100 Non-Commercial License 1.0。许可边界见 [LICENSING.md](LICENSING.md)。
+导入子工程保留上游 GPL-2.0 LICENSE；其中 Livox 消息定义保留 MIT LICENSE.txt；FAST-LIO / ikd-Tree 的第三方来源见子工程 `docs/SOURCE.md`。根目录 Python 工具仍使用 T100 Non-Commercial License 1.0。许可边界见 [LICENSING.md](LICENSING.md)。
