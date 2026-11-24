@@ -9,6 +9,8 @@
 
 **如果你的目标是把 500 元的 T100 当作普通 MID-360 一样接入 FAST-LIO2，请先走第一条路线。** 不需要先把 Python 桥接改成 C++，也不需要 Livox-SDK2。
 
+原 Python 协议工具的详细命令和模拟器说明仍保留在 [docs/PYTHON_TOOLKIT.zh-CN.md](docs/PYTHON_TOOLKIT.zh-CN.md)。
+
 ## 1. 先看懂整个数据链
 
 \`\`\`text
