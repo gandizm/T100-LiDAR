@@ -1,6 +1,6 @@
 # T100 / MID360-agras：从网口点云到 ROS 2 + FAST-LIO2
 
-[协议细节](integrations/mid360_agras_t100_lidar_driver/docs/protocol.zh-CN.md) · [原始完整工程 README](integrations/mid360_agras_t100_lidar_driver/README.md) · [许可证说明](docs/LICENSING.md)
+[协议细节](integrations/mid360_agras_t100_lidar_driver/docs/protocol.zh-CN.md) · [原始完整工程 README](integrations/mid360_agras_t100_lidar_driver/README.md) · [许可证说明](docs/LICENSING.md) · [主动一线通转接器设计](hardware/one_cable_adapter/README.zh-CN.md)
 
 这个仓库现在有两条互补的开发路线：
 
