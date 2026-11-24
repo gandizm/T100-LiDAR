@@ -1,0 +1,22 @@
+# Build output. Anchored on purpose: an unanchored "log/" would also hide FAST_LIO/Log on
+# case-insensitive file systems, and FAST_LIO crashes on exit without that folder.
+/linux/build/
+/ros2_ws/build/
+/ros2_ws/install/
+/ros2_ws/log/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Recordings and local logs
+/windows_viewer/captures/*
+!/windows_viewer/captures/.gitkeep
+/windows_viewer/viewer_error.log
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
