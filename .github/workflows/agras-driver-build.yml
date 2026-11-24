@@ -1,0 +1,32 @@
+name: Agras T100 driver build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  standalone-cpp:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure standalone C++ driver
+        run: |
+          cmake -S integrations/mid360_agras_t100_lidar_driver/linux \
+            -B build/agras-linux -DCMAKE_BUILD_TYPE=Release
+      - name: Build standalone C++ driver
+        run: cmake --build build/agras-linux --parallel 2
+
+  python-tools-syntax:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check imported Python tools
+        run: |
+          python -m compileall -q \
+            integrations/mid360_agras_t100_lidar_driver/tools \
+            integrations/mid360_agras_t100_lidar_driver/scripts \
+            integrations/mid360_agras_t100_lidar_driver/windows_viewer

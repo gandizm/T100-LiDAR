@@ -71,6 +71,8 @@ FAST-LIO2
 | GPS 报文 | A8 | 外部授时输入，未验证，不接 |
 | 未确认 | A5、A9 | 不接 |
 
+![MID360-agras T100 Type-C A-face pinout](integrations/mid360_agras_t100_lidar_driver/docs/images/pinout.zh-CN.png)
+
 网口是 100BASE-TX，只使用两对双绞线。蓝色、棕色两对不接。
 
 <badge color="warning">与早先流传的 24Pin 图有冲突</badge>
