@@ -34,7 +34,7 @@ Livox ROS Driver2 / FAST-LIO2).
 ~~~bash
 mkdir -p ~/t100_ws/src
 cd ~/t100_ws/src
-git clone https://github.com/gandizm/T100-LiDAR.git
+git clone -b feature/mid360-compatible-ros2 https://github.com/gandizm/T100-LiDAR.git
 git clone -b ROS2 https://github.com/hku-mars/FAST_LIO.git
 cd ~/t100_ws
 rosdep install --from-paths src --ignore-src -r -y

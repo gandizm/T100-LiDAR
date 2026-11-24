@@ -141,7 +141,7 @@ Example: Ubuntu 22.04 + ROS 2 Humble. A minimal livox_ros_driver2 message/interf
 ~~~bash
 mkdir -p ~/t100_ws/src
 cd ~/t100_ws/src
-git clone https://github.com/gandizm/T100-LiDAR.git
+git clone -b feature/mid360-compatible-ros2 https://github.com/gandizm/T100-LiDAR.git
 git clone -b ROS2 https://github.com/hku-mars/FAST_LIO.git
 cd ~/t100_ws
 source /opt/ros/humble/setup.bash
