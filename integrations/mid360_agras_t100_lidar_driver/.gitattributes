@@ -1,0 +1,11 @@
+# Text is LF everywhere, also on Windows checkouts: the shell scripts and launch files run on Linux.
+* text=auto eol=lf
+
+# Batch files keep their bytes (one is GBK with CRLF for Chinese Windows).
+*.bat -text
+
+*.png binary
+*.jpg binary
+
+# Third-party source stays byte-identical to upstream (S2.hpp is CRLF there).
+ros2_ws/src/FAST_LIO/** -text

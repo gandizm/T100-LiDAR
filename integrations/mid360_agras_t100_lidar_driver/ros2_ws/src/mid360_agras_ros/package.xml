@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mid360_agras_ros</name>
+  <version>0.1.0</version>
+  <description>ROS2 node for the DJI Agras Mid-360 (fixed IP 192.168.1.10, UDP 60001/60003) built on the standalone
+    driver in linux/, with launch files and the FAST-LIO configuration for this lidar.</description>
+  <maintainer email="yukina@example.com">yukina</maintainer>
+  <license>GPL-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>livox_ros_driver2</depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>fast_lio</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
