@@ -38,9 +38,14 @@ class T100LivoxCompatNode(Node):
         super().__init__("t100_livox_compat")
 
         self.declare_parameter("device_ip", "")
+        self.declare_parameter("host_ip", "")
         self.declare_parameter("bind_ip", "0.0.0.0")
         self.declare_parameter("point_port", 60001)
         self.declare_parameter("imu_port", 60003)
+        self.declare_parameter("configure_device", True)
+        self.declare_parameter("restore_device_destinations", False)
+        self.declare_parameter("auto_stop_on_exit", True)
+        self.declare_parameter("max_point_range_m", 150.0)
         self.declare_parameter("publish_freq", 10.0)
         self.declare_parameter("xfer_format", 1)
         self.declare_parameter("frame_id", "livox_frame")
@@ -50,9 +55,21 @@ class T100LivoxCompatNode(Node):
         self.declare_parameter("lidar_id", 0)
         self.declare_parameter("max_pending_points", 300000)
         self.declare_parameter("auto_start", False)
+        # Common Livox ROS Driver 2 launch parameters retained for drop-in use.
+        self.declare_parameter("multi_topic", 0)
+        self.declare_parameter("data_src", 0)
+        self.declare_parameter("output_data_type", 0)
+        self.declare_parameter("user_config_path", "")
 
         self.device_ip = str(self.get_parameter("device_ip").value).strip()
+        self.host_ip = str(self.get_parameter("host_ip").value).strip()
         self.bind_ip = str(self.get_parameter("bind_ip").value).strip()
+        self.configure_device = bool(self.get_parameter("configure_device").value)
+        self.restore_device_destinations = bool(
+            self.get_parameter("restore_device_destinations").value
+        )
+        self.auto_stop_on_exit = bool(self.get_parameter("auto_stop_on_exit").value)
+        self.max_point_range_m = float(self.get_parameter("max_point_range_m").value)
         self.point_port = int(self.get_parameter("point_port").value)
         self.imu_port = int(self.get_parameter("imu_port").value)
         self.publish_freq = float(self.get_parameter("publish_freq").value)
@@ -63,6 +80,10 @@ class T100LivoxCompatNode(Node):
         self.line_count = int(self.get_parameter("line_count").value)
         self.lidar_id = int(self.get_parameter("lidar_id").value)
         self.max_pending_points = int(self.get_parameter("max_pending_points").value)
+        self.multi_topic = int(self.get_parameter("multi_topic").value)
+        self.data_src = int(self.get_parameter("data_src").value)
+        self.output_data_type = int(self.get_parameter("output_data_type").value)
+        self.user_config_path = str(self.get_parameter("user_config_path").value)
 
         if not self.device_ip:
             raise ValueError("set the device_ip launch parameter to the T100 IPv4 address")
@@ -82,6 +103,14 @@ class T100LivoxCompatNode(Node):
             raise ValueError("lidar_id must fit uint8")
         if self.max_pending_points < 96:
             raise ValueError("max_pending_points must be at least one 96-point packet")
+        if self.multi_topic != 0:
+            raise ValueError("multi_topic=1 is not supported by the single-T100 bridge")
+        if self.data_src != 0:
+            raise ValueError("only live T100 UDP input (data_src=0) is supported")
+        if self.output_data_type != 0:
+            raise ValueError("only ROS output (output_data_type=0) is supported")
+        if self.max_point_range_m < 0:
+            raise ValueError("max_point_range_m must be non-negative")
 
         prefix = self.topic_prefix
         lidar_topic = f"{prefix}/lidar" if prefix else "lidar"
@@ -112,10 +141,27 @@ class T100LivoxCompatNode(Node):
         self._open_socket(self.point_port)
         self._open_socket(self.imu_port)
 
+        self._previous_destinations = None
+        self._started_by_node = False
+        if self.configure_device:
+            try:
+                self._configure_stream_destinations()
+            except Exception:
+                for sock in self._sockets:
+                    sock.close()
+                raise
+
         if bool(self.get_parameter("auto_start").value):
             try:
                 self._start_device_sampling()
             except Exception:
+                if self.restore_device_destinations:
+                    try:
+                        self._restore_stream_destinations()
+                    except Exception as restore_error:
+                        self.get_logger().error(
+                            f"failed to restore T100 destinations after startup failure: {restore_error}"
+                        )
                 for sock in self._sockets:
                     sock.close()
                 raise
@@ -142,13 +188,79 @@ class T100LivoxCompatNode(Node):
         sock.setblocking(False)
         self._sockets.append(sock)
 
+    def _detect_host_ip(self):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect((self.device_ip, 60000))
+            address = probe.getsockname()[0]
+        finally:
+            probe.close()
+        if not address or address == "0.0.0.0":
+            raise RuntimeError("could not determine host IPv4 address; set host_ip explicitly")
+        return address
+
+    def _configure_stream_destinations(self):
+        from t100_lidar.client import Client
+
+        if not self.host_ip:
+            self.host_ip = self._detect_host_ip()
+
+        names = ("host_pcl_ip", "host_pcl_port", "host_imu_ip", "host_imu_port")
+        desired = {
+            "host_pcl_ip": self.host_ip,
+            "host_pcl_port": self.point_port,
+            "host_imu_ip": self.host_ip,
+            "host_imu_port": self.imu_port,
+        }
+        with Client(self.device_ip, port=60000, bind=self.bind_ip, timeout=1.0) as client:
+            previous = client.read_many(names)
+            changed = []
+            try:
+                for name in names:
+                    if previous[name] != desired[name]:
+                        client.write(name, desired[name])
+                        changed.append(name)
+            except Exception:
+                for name in reversed(changed):
+                    try:
+                        client.write(name, previous[name])
+                    except Exception as rollback_error:
+                        self.get_logger().error(
+                            f"failed to roll back T100 parameter {name}: {rollback_error}"
+                        )
+                raise
+        self._previous_destinations = previous
+        self.get_logger().info(
+            "T100 point/IMU UDP destinations configured and read back: "
+            f"{self.host_ip}:{self.point_port}, {self.host_ip}:{self.imu_port}"
+        )
+
+    def _restore_stream_destinations(self):
+        if self._previous_destinations is None:
+            return
+        from t100_lidar.client import Client
+
+        names = ("host_pcl_ip", "host_pcl_port", "host_imu_ip", "host_imu_port")
+        with Client(self.device_ip, port=60000, bind=self.bind_ip, timeout=1.0) as client:
+            for name in reversed(names):
+                client.write(name, self._previous_destinations[name])
+        self.get_logger().info("restored the T100 point/IMU UDP destinations")
+
     def _start_device_sampling(self):
-        # Explicit opt-in: the default is passive receive-only operation.
         from t100_lidar.client import Client
 
         with Client(self.device_ip, port=60000, bind=self.bind_ip, timeout=1.0) as client:
             state = client.start()
+        self._started_by_node = True
         self.get_logger().info(f"T100 sampling start requested; target state readback={state}")
+
+    def _stop_device_sampling(self):
+        from t100_lidar.client import Client
+
+        with Client(self.device_ip, port=60000, bind=self.bind_ip, timeout=1.0) as client:
+            state = client.stop()
+        self._started_by_node = False
+        self.get_logger().info(f"T100 sampling stop requested; target state readback={state}")
 
     def _receive_loop(self):
         while not self._stop_event.is_set():
@@ -178,7 +290,9 @@ class T100LivoxCompatNode(Node):
                     if not self._accept_time_type(packet.time_type):
                         continue
                     if packet.kind == "points":
-                        points = packet_to_livox_points(packet, self.line_count)
+                        points = packet_to_livox_points(
+                            packet, self.line_count, self.max_point_range_m
+                        )
                         with self._lock:
                             self._counters["point_packets"] += 1
                             overflow = max(
@@ -231,8 +345,11 @@ class T100LivoxCompatNode(Node):
         msg.linear_acceleration.y = acceleration[1]
         msg.linear_acceleration.z = acceleration[2]
 
-        # T100 supplies angular velocity and acceleration, not orientation.
+        # T100 supplies angular velocity and acceleration, not orientation;
+        # covariance is also undocumented, so mark all three as unknown.
         msg.orientation_covariance[0] = -1.0
+        msg.angular_velocity_covariance[0] = -1.0
+        msg.linear_acceleration_covariance[0] = -1.0
         self.imu_pub.publish(msg)
         with self._lock:
             self._counters["imu_packets"] += 1
@@ -321,6 +438,18 @@ class T100LivoxCompatNode(Node):
                 pass
         if hasattr(self, "_receiver_thread"):
             self._receiver_thread.join(timeout=1.0)
+
+        if self._started_by_node and self.auto_stop_on_exit:
+            try:
+                self._stop_device_sampling()
+            except Exception as error:
+                self.get_logger().error(f"failed to stop T100 on shutdown: {error}")
+
+        if self.restore_device_destinations:
+            try:
+                self._restore_stream_destinations()
+            except Exception as error:
+                self.get_logger().error(f"failed to restore T100 UDP destinations: {error}")
         return super().destroy_node()
 
 

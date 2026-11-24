@@ -26,11 +26,17 @@ class LivoxCompatPoint:
     line: int
 
 
-def packet_to_livox_points(packet: DataPacket, line_count: int = 4) -> List[LivoxCompatPoint]:
+def packet_to_livox_points(
+    packet: DataPacket,
+    line_count: int = 4,
+    max_range_m: float = 150.0,
+) -> List[LivoxCompatPoint]:
     """Convert one T100 Cartesian-high packet to timestamped Livox points.
 
-    T100 time_interval is expressed in 0.1 microsecond units. Livox SDK2
-    computes the point interval as time_interval * 100 / dot_num (ns).
+    The per-point interval follows Livox ROS Driver 2's SDK2 callback:
+    time_interval * 100 / dot_num nanoseconds. The line assignment mirrors
+    the upstream MID360 mapping (point_index % 4 by default); T100-Agras
+    channel/ring semantics still need confirmation on a physical unit.
     """
     if packet.kind != "points":
         raise ValueError("expected a point-cloud packet")
@@ -42,18 +48,28 @@ def packet_to_livox_points(packet: DataPacket, line_count: int = 4) -> List[Livo
     point_interval_ns = packet.time_interval_0_1us * 100 // len(packet.points)
     if point_interval_ns <= 0:
         raise ValueError("point packet time_interval is too small to recover per-point timing")
-    return [
-        LivoxCompatPoint(
-            timestamp_ns=packet.timestamp_ns + index * point_interval_ns,
-            x=point.x / 1000.0,
-            y=point.y / 1000.0,
-            z=point.z / 1000.0,
-            reflectivity=point.reflectivity,
-            tag=point.tag,
-            line=index % line_count,
+
+    converted = []
+    for index, point in enumerate(packet.points):
+        distance_squared = point.x * point.x + point.y * point.y + point.z * point.z
+        if distance_squared == 0:
+            continue
+        if max_range_m > 0 and distance_squared > (max_range_m * 1000.0) ** 2:
+            continue
+        converted.append(
+            LivoxCompatPoint(
+                # Keep the original packet index after filtering so time offsets
+                # remain tied to the wire order rather than the filtered list.
+                timestamp_ns=packet.timestamp_ns + index * point_interval_ns,
+                x=point.x / 1000.0,
+                y=point.y / 1000.0,
+                z=point.z / 1000.0,
+                reflectivity=point.reflectivity,
+                tag=point.tag,
+                line=index % line_count,
+            )
         )
-        for index, point in enumerate(packet.points)
-    ]
+    return converted
 
 
 def split_livox_batches(

@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Compatibility executable name used by common Livox ROS Driver 2 launch files."""
+from t100_livox_compat.node import main
+
+if __name__ == "__main__":
+    main()
