@@ -7,6 +7,12 @@ from pathlib import Path
 from t100_lidar.parameters import PARAMETERS, parameter
 from t100_lidar.protocol import DataPacket, Frame, Point, ProtocolError, decode_data, decode_status
 from t100_lidar.stream import SequenceTracker
+from t100_lidar.ros2_compat import (
+    LivoxCompatPoint,
+    acceleration_g_to_mps2,
+    packet_to_livox_points,
+    split_livox_batches,
+)
 
 
 class FrameTests(unittest.TestCase):
@@ -56,6 +62,7 @@ class DataTests(unittest.TestCase):
         raw = bytearray(1380)
         raw[0] = 1
         struct.pack_into("<H",raw,1,1380)
+        struct.pack_into("<H",raw,3,1000)
         struct.pack_into("<HH",raw,5,96,65535)
         raw[10] = 1
         struct.pack_into("<Q",raw,28,123456789)
@@ -70,6 +77,43 @@ class DataTests(unittest.TestCase):
         self.assertEqual(len(packet.points),96)
         self.assertEqual(packet.points[0].as_meters(),[-1.0,2.0,3.0,60,16])
         self.assertFalse(packet.crc32_checked)
+
+    def test_t100_point_timing_matches_livox_sdk2_formula(self):
+        packet = decode_data(bytes(self.point_fixture()))
+        self.assertEqual(packet.time_interval_0_1us, 1000)
+        points = packet_to_livox_points(packet, line_count=4)
+        self.assertEqual(len(points), 96)
+        self.assertEqual(points[0].timestamp_ns, 123456789)
+        self.assertEqual(points[1].timestamp_ns - points[0].timestamp_ns, 1041)
+        self.assertEqual(points[0].line, 0)
+        self.assertEqual(points[3].line, 3)
+        self.assertEqual(points[4].line, 0)
+        self.assertEqual((points[0].x, points[0].y, points[0].z), (-1.0, 2.0, 3.0))
+
+    def test_zero_point_interval_is_rejected_for_lio(self):
+        packet = decode_data(bytes(self.point_fixture()))
+        from dataclasses import replace
+        with self.assertRaises(ValueError):
+            packet_to_livox_points(replace(packet, time_interval_0_1us=0))
+
+    def test_custom_msg_batch_splits_uint32_offsets(self):
+        points = [
+            LivoxCompatPoint(100, 0.0, 0.0, 0.0, 1, 0, 0),
+            LivoxCompatPoint(200, 1.0, 0.0, 0.0, 2, 0, 1),
+            LivoxCompatPoint(0xFFFFFFFF + 300, 2.0, 0.0, 0.0, 3, 0, 2),
+        ]
+        batches = split_livox_batches(points)
+        self.assertEqual(len(batches), 2)
+        self.assertEqual(batches[0][0], 100)
+        self.assertEqual([item[0] for item in batches[0][1]], [0, 100])
+        self.assertEqual(batches[1][0], 0xFFFFFFFF + 300)
+        self.assertEqual(batches[1][1][0][0], 0)
+
+    def test_imu_acceleration_is_converted_from_g_to_si(self):
+        converted = acceleration_g_to_mps2((0.0, -1.0, 1.0))
+        self.assertAlmostEqual(converted[0], 0.0)
+        self.assertAlmostEqual(converted[1], -9.80665)
+        self.assertAlmostEqual(converted[2], 9.80665)
 
     def test_invalid_point_packets(self):
         good = self.point_fixture()

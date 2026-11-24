@@ -100,13 +100,16 @@ class DataPacket:
     gyro: Tuple[float, ...] = ()
     acceleration: Tuple[float, ...] = ()
     crc32_checked: bool = False
+    time_interval_0_1us: int = 0
+    frame_count: int = 0
 
 
 def decode_data(data: bytes) -> DataPacket:
     if len(data) < 36 or data[0] != 1:
         raise ProtocolError("invalid data header")
     size = struct.unpack_from("<H", data, 1)[0]
-    count, sequence = struct.unpack_from("<HH", data, 5)
+    time_interval, count, sequence = struct.unpack_from("<HHH", data, 3)
+    frame_count = data[9]
     if size != len(data):
         raise ProtocolError("data length mismatch")
     timestamp = struct.unpack_from("<Q", data, 28)[0]
@@ -115,7 +118,10 @@ def decode_data(data: bytes) -> DataPacket:
         if count != 96 or len(data) != 1380:
             raise ProtocolError("expected 96 XYZ points in a 1380-byte packet")
         points = tuple(Point(*record) for record in struct.iter_unpack("<iiiBB", data[36:]))
-        return DataPacket("points", sequence, timestamp, time_type, points)
+        return DataPacket(
+            "points", sequence, timestamp, time_type, points,
+            time_interval_0_1us=time_interval, frame_count=frame_count
+        )
     if dtype == 0:
         if count != 1 or len(data) != 60:
             raise ProtocolError("expected one IMU sample in a 60-byte packet")
@@ -125,7 +131,10 @@ def decode_data(data: bytes) -> DataPacket:
         values = struct.unpack_from("<6f", data, 36)
         if not all(math.isfinite(v) for v in values):
             raise ProtocolError("non-finite IMU sample")
-        return DataPacket("imu", sequence, timestamp, time_type, (), values[:3], values[3:], True)
+        return DataPacket(
+            "imu", sequence, timestamp, time_type, (), values[:3], values[3:], True,
+            time_interval, frame_count
+        )
     raise ProtocolError(f"unsupported data_type {dtype}")
 
 

@@ -12,7 +12,7 @@ The simulator produces synthetic points; it does not demonstrate physical device
 
 ### T100激光雷达驱动 / T100 LiDAR driver
 
-The Python driver receives UDP point cloud and IMU data and sends protocol control requests. See the [command-line examples](#command-line-examples). It is a protocol client, rather than an operating-system driver or a ROS/ROS2 package.
+The core Python client receives UDP point cloud and IMU data and sends protocol control requests. An optional ROS 2 compatibility package is included under ros2/t100_livox_compat; it publishes the same Livox ROS Driver 2 message types and default topics. It is not a kernel driver and does not emulate the Livox SDK2 device-control/discovery API.
 
 ### T100激光雷达刷固件 / Firmware write mode entry
 
@@ -110,3 +110,55 @@ See [the Chinese quick start](README.zh-CN.md), [the published protocol snapshot
 **Non-commercial use only. Commercial use is prohibited. No commercial authorization is offered.**
 
 The original code and documentation are available under the [T100 Non-Commercial License 1.0](LICENSE). Non-commercial learning, research, modification and redistribution are permitted subject to its terms. Commercial products or services, paid repair work, business operations and commercial research or development are prohibited. Keep the copyright and license notices, and identify changes when redistributing modified copies. This is a source-available project, not an OSI-approved open-source license.
+
+## ROS 2 / Livox MID360 interface compatibility
+
+The optional ros2/t100_livox_compat package receives native T100 UDP point-cloud and IMU packets and publishes:
+
+| Topic | ROS 2 type |
+|---|---|
+| /livox/lidar | livox_ros_driver2/msg/CustomMsg |
+| /livox/imu | sensor_msgs/msg/Imu |
+
+This keeps the usual FAST-LIO2/Livox custom-message subscription contract. It is a ROS-message compatibility bridge, not an SDK2 device emulator: the official Livox ROS Driver 2 package is needed for its generated CustomMsg type, but its MID360 node is not launched.
+
+### Build
+
+1. Build/install the official Livox ROS Driver 2 package in the same ROS 2 workspace. This bridge uses its CustomMsg and CustomPoint definitions.
+2. Put this repository under the workspace src/ directory.
+3. Source the ROS 2 distribution and build:
+
+```sh
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-up-to t100_livox_compat
+source install/setup.bash
+```
+
+### Run
+
+First configure the T100 to send point-cloud and IMU UDP traffic to the ROS 2 host. The default receive ports are 60001 and 60003; verify the actual destination with a packet capture before changing them. Start sampling separately unless auto_start:=true is explicitly requested.
+
+```sh
+t100 --ip <T100_IP> start
+ros2 launch t100_livox_compat t100_mid360_compat.launch.py \
+  device_ip:=<T100_IP> bind_ip:=<ROS_HOST_IP>
+```
+
+The bridge publishes at 10 Hz by default. Useful checks:
+
+```sh
+ros2 topic info /livox/lidar -v
+ros2 topic hz /livox/lidar
+ros2 topic echo /livox/imu --once
+```
+
+### Compatibility scope and validation status
+
+- Supported input packets: the documented 96-point Cartesian-high packet (data_type=1) and one-sample IMU packet (data_type=0).
+- Point timing follows the Livox SDK2/ROS Driver 2 calculation: time_interval * 100 / dot_num nanoseconds per point. Points are batched into CustomMsg messages with a uint64 timebase and uint32 relative offset_time.
+- The default line_count=4 follows the official MID360 driver setting. Confirm the T100 channel/ring interpretation with real captures before relying on it.
+- T100 acceleration is documented in g and is converted to m/s² for sensor_msgs/Imu; angular velocity remains rad/s.
+- Device timestamps are forwarded unchanged so point and IMU streams retain their common device time domain. In time_type=0, this is the device's since-startup time, not Unix epoch time.
+- This first bridge milestone has protocol/unit tests but has not been validated against a physical T100. Confirm actual packet destinations, timestamp monotonicity, time-type agreement, point interval behavior, line mapping, and IMU units with real-device PCAPs.
+- The bridge does not implement Livox SDK2 discovery/control emulation, LVX recording, or every Livox ROS Driver 2 configuration feature. It aims to leave downstream ROS consumers unchanged, not every SDK-level integration.
