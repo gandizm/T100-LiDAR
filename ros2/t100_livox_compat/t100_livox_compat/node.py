@@ -95,10 +95,13 @@ class T100LivoxCompatNode(Node):
             "published_imus": 0,
             "bad_packets": 0,
             "wrong_source": 0,
+            "time_type_mismatch": 0,
             "dropped_points": 0,
             "bytes": 0,
         }
         self._last_stats = time.monotonic()
+        self._time_type = None
+        self._time_type_mismatch_logged = False
 
         self._open_socket(self.point_port)
         self._open_socket(self.imu_port)
@@ -166,6 +169,8 @@ class T100LivoxCompatNode(Node):
 
                 try:
                     packet = decode_data(data)
+                    if not self._accept_time_type(packet.time_type):
+                        continue
                     if packet.kind == "points":
                         points = packet_to_livox_points(packet, self.line_count)
                         with self._lock:
@@ -183,6 +188,28 @@ class T100LivoxCompatNode(Node):
                 except (ProtocolError, ValueError, struct.error):
                     with self._lock:
                         self._counters["bad_packets"] += 1
+
+    def _accept_time_type(self, packet_time_type):
+        should_log = False
+        with self._lock:
+            if self._time_type is None:
+                self._time_type = packet_time_type
+                return True
+            if packet_time_type == self._time_type:
+                return True
+            self._counters["time_type_mismatch"] += 1
+            if not self._time_type_mismatch_logged:
+                self._time_type_mismatch_logged = True
+                should_log = True
+            expected = self._time_type
+        if should_log:
+            self.get_logger().error(
+                f"Rejecting packets with time_type={packet_time_type}; "
+                f"the first stream established time_type={expected}. "
+                "Point-cloud and IMU timestamps must share one time domain; "
+                "check device synchronization settings and restart the bridge."
+            )
+        return False
 
     def _publish_imu(self, packet):
         msg = Imu()
@@ -253,6 +280,7 @@ class T100LivoxCompatNode(Node):
             f"clouds={snapshot['published_clouds']}, "
             f"bad={snapshot['bad_packets']}, "
             f"wrong_source={snapshot['wrong_source']}, "
+            f"time_type_mismatch={snapshot['time_type_mismatch']}, "
             f"dropped_points={snapshot['dropped_points']}, "
             f"pending_points={pending}"
         )
