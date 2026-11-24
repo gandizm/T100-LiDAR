@@ -7,13 +7,14 @@ It does not emulate the Livox SDK2 device-discovery/control protocol.
 import select
 import socket
 import struct
+from dataclasses import replace
 import threading
 import time
 
 import rclpy
 from livox_ros_driver2.msg import CustomMsg, CustomPoint
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu, PointCloud2, PointField
 
 from t100_lidar.protocol import ProtocolError, decode_data
@@ -26,6 +27,13 @@ from t100_lidar.ros2_compat import (
 
 
 NSEC_PER_SEC = 1_000_000_000
+
+# FAST-LIO2 uses reliable subscriptions for Livox CustomMsg and IMU.
+LIVOX_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=20,
+    reliability=ReliabilityPolicy.RELIABLE,
+)
 
 
 def set_ros_stamp(stamp, timestamp_ns):
@@ -87,8 +95,8 @@ class T100LivoxCompatNode(Node):
         lidar_topic = f"{prefix}/lidar" if prefix else "lidar"
         imu_topic = f"{prefix}/imu" if prefix else "imu"
         lidar_message_type = CustomMsg if self.xfer_format == 1 else PointCloud2
-        self.lidar_pub = self.create_publisher(lidar_message_type, lidar_topic, qos_profile_sensor_data)
-        self.imu_pub = self.create_publisher(Imu, imu_topic, qos_profile_sensor_data)
+        self.lidar_pub = self.create_publisher(lidar_message_type, lidar_topic, LIVOX_QOS)
+        self.imu_pub = self.create_publisher(Imu, imu_topic, LIVOX_QOS)
 
         self._lock = threading.Lock()
         self._pending_points = []
@@ -107,6 +115,7 @@ class T100LivoxCompatNode(Node):
         }
         self._last_stats = time.monotonic()
         self._time_type = None
+        self._device_to_host_offset_ns = None
         self._time_type_mismatch_logged = False
 
         self._open_socket(self.point_port)
@@ -177,6 +186,7 @@ class T100LivoxCompatNode(Node):
                     packet = decode_data(data)
                     if not self._accept_time_type(packet.time_type):
                         continue
+                    packet = self._map_packet_timestamp(packet)
                     if packet.kind == "points":
                         points = packet_to_livox_points(packet, self.line_count)
                         with self._lock:
@@ -216,6 +226,17 @@ class T100LivoxCompatNode(Node):
                 "check device synchronization settings and restart the bridge."
             )
         return False
+
+    def _map_packet_timestamp(self, packet):
+        """Map unsynchronized device-uptime stamps to one host epoch for both streams."""
+        if packet.time_type != 0:
+            return packet
+        if self._device_to_host_offset_ns is None:
+            self._device_to_host_offset_ns = time.time_ns() - packet.timestamp_ns
+        return replace(
+            packet,
+            timestamp_ns=packet.timestamp_ns + self._device_to_host_offset_ns,
+        )
 
     def _publish_imu(self, packet):
         msg = Imu()
@@ -282,7 +303,7 @@ class T100LivoxCompatNode(Node):
                 msg.is_bigendian = False
                 msg.point_step = 26
                 msg.row_step = msg.point_step * msg.width
-                msg.is_dense = True
+                msg.is_dense = False
                 msg.data = pack_pointcloud2_data(batch)
 
             self.lidar_pub.publish(msg)

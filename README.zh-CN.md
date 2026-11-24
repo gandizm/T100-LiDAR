@@ -10,7 +10,7 @@ T100激光雷达驱动与通信协议工具：通过 Ethernet/UDP 获取点云�
 
 ### T100激光雷达驱动在哪里？
 
-核心 Python 客户端提供 UDP 点云与 IMU 接收解析、控制命令和参数读写。另外新增 ros2/t100_livox_compat ROS 2 兼容包，可发布 Livox ROS Driver 2 的消息类型和默认话题。它不是内核驱动，也不模拟 Livox SDK2 的设备发现与控制 API。
+核心 Python 客户端提供 UDP 点云与 IMU 接收解析、控制命令和参数读写。原生 C++ ROS 2 替代驱动位于 ros2/livox_ros_driver2，提供 Livox ROS Driver 2 的消息接口和默认话题；ros2/t100_livox_compat 保留为 Python 参考桥接。它们都不模拟 Livox SDK2 的设备发现与控制 API。
 
 ### T100激光雷达刷固件：怎么进入固件写入模式？
 
@@ -92,7 +92,7 @@ t100 --ip 192.0.2.10 enter-write-mode
 - `docs/`：公开协议快照与来源记录。
 - `tests/`：公开报文样例、异常报文、UDP 模拟设备和本地服务测试。
 
-PCAP 记录保留 UDP 载荷、接收时间和端点，IPv4/UDP 头由程序重建，不能当作完整链路层抓包。网页 CSV 是最近两秒内的有效模拟点。没有加入 ROS2、厂商 SDK 或未实现的平台支持描述。
+PCAP 记录保留 UDP 载荷、接收时间和端点，IPv4/UDP 头由程序重建，不能当作完整链路层抓包。网页 CSV 是最近两秒内的有效模拟点。不包含厂商 SDK2 或其他平台支持；ROS 2 兼容驱动见下文。
 
 ## 使用许可
 
@@ -100,54 +100,86 @@ PCAP 记录保留 UDP 载荷、接收时间和端点，IPv4/UDP 头由程序重�
 
 本仓库原创代码和文档采用 [T100 非商业使用许可 1.0](LICENSE)。允许在遵守条款的前提下进行非商业学习、研究、修改和分享；禁止用于商业产品或服务、收费维修、企业经营和商业研发。再分发时须保留版权与许可声明，修改版须标明修改。代码公开可见，不属于 OSI 定义的开源许可。英文 `LICENSE` 为完整条款，本段是中文摘要。
 
-## ROS 2 / Livox MID360 接口兼容
+## ROS 2：让 T100 替代 MID360 的接入层
 
-新增的 ros2/t100_livox_compat 接收 T100 原生 UDP 点云和 IMU，并发布与 Livox ROS Driver 2 相同的默认接口：
+本仓库现在包含一个原生 C++ ROS 2 驱动包：ros2/livox_ros_driver2。它使用 T100 自己的 Ethernet/UDP 协议接收点云和 IMU，但对下游发布 Livox ROS Driver 2 的消息接口和默认话题：
 
 | Topic | ROS 2 消息类型 |
 |---|---|
 | /livox/lidar | livox_ros_driver2/msg/CustomMsg |
 | /livox/imu | sensor_msgs/msg/Imu |
 
-接口同时提供两种官方驱动风格：`xfer_format:=1` 发布 CustomMsg（FAST-LIO2 通常使用此格式，且为默认值）；`xfer_format:=0` 发布官方 Livox PointXYZRTLT PointCloud2 字段布局。注意：这是 ROS 消息接口兼容，不是 SDK2 设备仿真。需要在同一个 ROS 2 工作空间构建官方 Livox ROS Driver 2，以提供 CustomMsg 和 CustomPoint 消息定义，但不需要启动官方 MID360 驱动节点。
+它的设计目标是让 FAST-LIO2 等使用 Livox CustomMsg 的项目不必修改订阅消息类型和话题。启动时使用 T100 的 IP，不再启动官方 MID360 驱动，也不需要 Livox-SDK2。
+
+### 兼容方式
+
+- ROS 包名仍为 livox_ros_driver2，提供 CustomMsg.msg 和 CustomPoint.msg，并提供同名风格的 livox_ros_driver2_node 可执行程序。
+- xfer_format=1 发布 CustomMsg，是 FAST-LIO2 推荐路径；xfer_format=0 发布 Livox PointXYZRTLT 布局的 PointCloud2。
+- 点云按 publish_freq 聚合，默认 10 Hz；每点 offset_time 按 Livox MID360 驱动的公式计算：time_interval × 100 / dot_num，单位 ns。
+- line 使用 point_index % 4，沿用 Livox MID360 的四线编号约定；T100 原始 tag 直接透传，不擅自改写。
+- IMU 角速度按 rad/s 发布；T100 文档中的加速度单位为 g，发布前乘以 9.80665 转换为 m/s²。
+- time_type=0 是设备启动后的时间。驱动使用同一个设备到主机时间偏移映射点云和 IMU 时间戳，保持两路相对同步；time_type=1/2 则使用设备同步时间戳。
+- 默认自动把 T100 点云和 IMU 目的地址配置到当前主机，并在正常退出时恢复原设置；也会请求启动采样，退出时请求停止。
+
+**重要：** 这里实现的是 ROS 消息/话题兼容，不是 Livox SDK2 设备协议仿真。依赖 SDK2 API、LVX 录制或官方专有控制接口的程序不能因此自动兼容。
 
 ### 编译
 
-1. 在同一个 ROS 2 工作空间中构建/安装官方 Livox ROS Driver 2。
-2. 将本仓库放入工作空间的 src/。
-3. 以 Humble 为例：
+以 Ubuntu 22.04 + ROS 2 Humble 为例。仓库内已经包含一个精简的 livox_ros_driver2 消息接口包，因此不要再把官方 Livox ROS Driver 2 克隆到同一个工作空间；两个同名 ROS 包不能同时存在。
 
-```sh
-cd ~/ros2_ws
+~~~bash
+mkdir -p ~/t100_ws/src
+cd ~/t100_ws/src
+git clone https://github.com/gandizm/T100-LiDAR.git
+git clone -b ROS2 https://github.com/hku-mars/FAST_LIO.git
+cd ~/t100_ws
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-up-to t100_livox_compat
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --packages-up-to fast_lio
 source install/setup.bash
-```
+~~~
 
-### 运行
+### 运行：尽量保持 FAST-LIO2 原配置不变
 
-先将 T100 的点云和 IMU UDP 目的地址配置为 ROS 2 主机。默认监听端口为点云 60001、IMU 60003；实际目的端口应先通过抓包确认。默认不自动启动雷达采样：
+先确认 T100 与主机以太网连通，再启动驱动：
 
-```sh
-t100 --ip <T100_IP> start
-ros2 launch t100_livox_compat t100_mid360_compat.launch.py \
-  device_ip:=<T100_IP> bind_ip:=<ROS_HOST_IP>
-```
+~~~bash
+ros2 launch livox_ros_driver2 msg_T100_launch.py device_ip:=192.168.1.12
+~~~
 
-默认点云发布频率为 10 Hz。可用 `xfer_format:=1` 选择 CustomMsg，或 `xfer_format:=0` 选择官方 Livox PointCloud2 格式。检查接口：
+将 192.168.1.12 替换成实际 T100 IP。如果主机有多张网卡且自动路由选择不正确，可以显式指定 host_ip：
 
-```sh
+~~~bash
+ros2 launch livox_ros_driver2 msg_T100_launch.py device_ip:=192.168.1.12 host_ip:=192.168.1.20
+~~~
+
+另一个终端启动 FAST-LIO2 ROS 2 分支：
+
+~~~bash
+ros2 launch fast_lio mapping.launch.py config_file:=mid360.yaml rviz:=true
+~~~
+
+FAST-LIO2 的默认 /livox/lidar、/livox/imu 话题名和 CustomMsg 类型不需要改。T100 的安装位置与 MID360 不同，extrinsic_T / extrinsic_R 仍必须按实际安装重新标定。
+
+检查数据：
+
+~~~bash
 ros2 topic info /livox/lidar -v
 ros2 topic hz /livox/lidar
-ros2 topic echo /livox/imu --once
-```
+ros2 topic hz /livox/imu
+~~~
 
-### 兼容范围与当前验证状态
+### 首次上机必须验证的项目
 
-- 当前支持协议文档中的 96 点 Cartesian High 点云包（data_type=1）和单样本 IMU 包（data_type=0）。
-- 两种输出格式都沿用 Livox ROS Driver 2 的点字段定义。PointCloud2 使用 x/y/z/intensity/tag/line/timestamp，点步长为官方 26 bytes。点时间偏移沿用 Livox SDK2 / ROS Driver 2 的计算方式：time_interval * 100 / dot_num，单位 ns。多个 UDP 包会组帧为 CustomMsg，使用 uint64 timebase 和 uint32 相对 offset_time。
-- 默认 line_count=4，依据官方 MID360 驱动设置；T100 实际通道编号仍需用真实数据确认。
-- T100 文档中的加速度单位为 g，发布到 ROS sensor_msgs/Imu 前转换为 m/s²；角速度保持 rad/s。
-- 点云和 IMU 时间戳原样转发，以保留设备内部共同时间基准。若 time_type=0，时间为设备启动以来的时间，不是 Unix 时间。
-- 当前版本有协议和单元测试，但尚未在真实 T100 硬件上验证。需要用真实 PCAP 检查目的端口、时间戳单调性、两路时间类型一致性、点间隔、line 映射和 IMU 单位。
-- 当前不实现 Livox SDK2 设备发现/控制仿真、LVX 录制，也不覆盖官方驱动的全部配置功能。目标是保持下游 ROS 消息接口，而不是兼容所有 SDK 层功能。
+当前驱动已经实现协议解析、ROS 消息转换、设备目的地址配置、采样启停和数据聚合，但尚未在真实 T100 硬件上完成闭环验证。请先录制真实 PCAP，再验证：
+
+1. 设备是否真的按配置的 host_pcl_ip/port、host_imu_ip/port 发包；协议文档提醒配置回读端口与实际目的端口可能不一致。
+2. time_interval × 100 / dot_num 是否与当前固件版本的真实点间隔一致。
+3. time_type=0 时点云与 IMU 是否共享同一个设备时钟；两路 time_type 不一致时驱动会拒绝混合发布。
+4. T100 原始 tag 是否符合 FAST-LIO2 的 Livox 点筛选条件（tag & 0x30 为 0x10 或 0x00）。目前不强行改 tag，避免伪造点属性。
+5. IMU 三轴方向、角速度单位、加速度比例和雷达到 IMU 的外参。
+6. 实际点云包率、丢包、点密度、10 Hz 组帧延迟，以及 Orange Pi 5B / RDK X5 上的 CPU 占用。
+
+如果 time_interval 为零或计算出的点间隔为零，驱动默认仍发布点云，但每点 offset_time 会相同；这不能视为已经具备可靠的运动去畸变。只有在实测确认后，才设置 point_interval_fallback_ns。
+
+仓库还保留 ros2/t100_livox_compat 作为 Python 参考桥接实现；高点率和正式 FAST-LIO2 接入优先使用上面的原生 C++ 驱动。

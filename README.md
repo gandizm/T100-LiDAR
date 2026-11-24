@@ -12,7 +12,7 @@ The simulator produces synthetic points; it does not demonstrate physical device
 
 ### T100激光雷达驱动 / T100 LiDAR driver
 
-The core Python client receives UDP point cloud and IMU data and sends protocol control requests. An optional ROS 2 compatibility package is included under ros2/t100_livox_compat; it publishes the same Livox ROS Driver 2 message types and default topics. It is not a kernel driver and does not emulate the Livox SDK2 device-control/discovery API.
+The core Python client receives UDP point cloud and IMU data and sends protocol control requests. The native C++ ROS 2 replacement driver is under ros2/livox_ros_driver2 and provides the Livox ROS Driver 2 message interfaces and default topics; ros2/t100_livox_compat remains as a Python reference bridge. Neither emulates the Livox SDK2 device-control/discovery API.
 
 ### T100激光雷达刷固件 / Firmware write mode entry
 
@@ -89,7 +89,7 @@ Control requests use a single socket with matching endpoint, sequence and comman
 | C header | Portable control-frame CRC/build/check helpers |
 | Wireshark Lua | Control/data field dissection; CRC fields are displayed, not verified |
 
-External time synchronization can be encoded with `t100 frame time-sync`; the public reference does not define its ACK or complete synchronization conditions. The simulator does not claim to reproduce undocumented device behavior. No ROS/ROS2 integration is included.
+External time synchronization can be encoded with `t100 frame time-sync`; the public reference does not define its ACK or complete synchronization conditions. The simulator does not claim to reproduce undocumented device behavior. A native C++ ROS 2 driver is included; see the MID-360 compatibility section below. The repository does not include or emulate the Livox SDK2 device API.
 
 PCAP files preserve received UDP payloads, timing and socket endpoints. Link-layer information and original IP headers are not captured. Browser CSV exports contain valid simulated points from the rolling two-second buffer. Sequence gaps are observable counters, not a measurement of network loss by themselves.
 
@@ -111,54 +111,86 @@ See [the Chinese quick start](README.zh-CN.md), [the published protocol snapshot
 
 The original code and documentation are available under the [T100 Non-Commercial License 1.0](LICENSE). Non-commercial learning, research, modification and redistribution are permitted subject to its terms. Commercial products or services, paid repair work, business operations and commercial research or development are prohibited. Keep the copyright and license notices, and identify changes when redistributing modified copies. This is a source-available project, not an OSI-approved open-source license.
 
-## ROS 2 / Livox MID360 interface compatibility
+## ROS 2: use T100 as a MID-360-compatible source
 
-The optional ros2/t100_livox_compat package receives native T100 UDP point-cloud and IMU packets and publishes:
+The repository includes a native C++ ROS 2 driver package at ros2/livox_ros_driver2. It receives T100's native Ethernet/UDP protocol and publishes the Livox ROS Driver 2 message contract and default topics:
 
-| Topic | ROS 2 type |
+| Topic | ROS 2 message type |
 |---|---|
 | /livox/lidar | livox_ros_driver2/msg/CustomMsg |
 | /livox/imu | sensor_msgs/msg/Imu |
 
-This keeps the usual Livox ROS Driver 2 output contract: `xfer_format:=1` publishes `CustomMsg` (the default for FAST-LIO2), while `xfer_format:=0` publishes the official Livox `PointXYZRTLT` PointCloud2 field layout. It is a ROS-message compatibility bridge, not an SDK2 device emulator: the official Livox ROS Driver 2 package is needed for its generated CustomMsg type, but its MID360 node is not launched.
+The goal is to let FAST-LIO2 and other ROS consumers of Livox CustomMsg switch to T100 without changing their subscription types or default topic names. The driver connects to the T100 IP directly. It does not launch the official MID-360 node and does not require Livox-SDK2.
+
+### Compatibility behavior
+
+- The ROS package name remains livox_ros_driver2. This repository supplies the CustomMsg/CustomPoint interfaces and a livox_ros_driver2_node executable.
+- xfer_format=1 publishes CustomMsg (recommended for FAST-LIO2); xfer_format=0 publishes the Livox PointXYZRTLT PointCloud2 layout.
+- Point packets are aggregated at publish_freq (10 Hz by default). Per-point offsets use the MID-360 driver formula: time_interval × 100 / dot_num nanoseconds.
+- Point line is point_index % 4, following the four-line MID-360 convention. The raw T100 tag byte is passed through unchanged.
+- Gyroscope values are published in rad/s. T100 acceleration is documented in g and is converted to m/s^2.
+- For time_type=0 (device uptime), one shared device-to-host epoch offset is used for both LiDAR and IMU. time_type=1/2 timestamps are passed through as synchronized device time.
+- By default, the node configures the T100 point/IMU destination IP and ports, reads them back, starts sampling, and restores the original destinations and stops sampling on normal shutdown.
+
+This is ROS message/topic compatibility, not Livox SDK2 device-protocol emulation. Applications that depend on SDK2 APIs, LVX recording, or proprietary Livox control commands are not automatically compatible.
 
 ### Build
 
-1. Build/install the official Livox ROS Driver 2 package in the same ROS 2 workspace. This bridge uses its CustomMsg and CustomPoint definitions.
-2. Put this repository under the workspace src/ directory.
-3. Source the ROS 2 distribution and build:
+Example: Ubuntu 22.04 + ROS 2 Humble. A minimal livox_ros_driver2 message/interface package is included in this repository. Do not clone the official Livox ROS Driver 2 into the same workspace: two ROS packages with the same package name cannot coexist.
 
-```sh
-cd ~/ros2_ws
+~~~bash
+mkdir -p ~/t100_ws/src
+cd ~/t100_ws/src
+git clone https://github.com/gandizm/T100-LiDAR.git
+git clone -b ROS2 https://github.com/hku-mars/FAST_LIO.git
+cd ~/t100_ws
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-up-to t100_livox_compat
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --packages-up-to fast_lio
 source install/setup.bash
-```
+~~~
 
-### Run
+### Run with the existing FAST-LIO2 MID-360 configuration
 
-First configure the T100 to send point-cloud and IMU UDP traffic to the ROS 2 host. The default receive ports are 60001 and 60003; verify the actual destination with a packet capture before changing them. Start sampling separately unless auto_start:=true is explicitly requested.
+Start the driver, replacing the example address with the actual T100 IP:
 
-```sh
-t100 --ip <T100_IP> start
-ros2 launch t100_livox_compat t100_mid360_compat.launch.py \
-  device_ip:=<T100_IP> bind_ip:=<ROS_HOST_IP>
-```
+~~~bash
+ros2 launch livox_ros_driver2 msg_T100_launch.py device_ip:=192.168.1.12
+~~~
 
-The bridge publishes at 10 Hz by default. Set `xfer_format:=1` for Livox CustomMsg or `xfer_format:=0` for the official Livox PointCloud2 layout. Useful checks:
+If the host has multiple NICs and automatic route selection chooses the wrong one, specify host_ip:
 
-```sh
+~~~bash
+ros2 launch livox_ros_driver2 msg_T100_launch.py device_ip:=192.168.1.12 host_ip:=192.168.1.20
+~~~
+
+In another terminal, start the ROS 2 branch of FAST-LIO2:
+
+~~~bash
+ros2 launch fast_lio mapping.launch.py config_file:=mid360.yaml rviz:=true
+~~~
+
+FAST-LIO2's default /livox/lidar and /livox/imu topic names and CustomMsg type can remain unchanged. The T100 mounting pose differs from a standard MID-360 installation, so extrinsic_T / extrinsic_R must still be calibrated for the actual mounting.
+
+Check the streams:
+
+~~~bash
 ros2 topic info /livox/lidar -v
 ros2 topic hz /livox/lidar
-ros2 topic echo /livox/imu --once
-```
+ros2 topic hz /livox/imu
+~~~
 
-### Compatibility scope and validation status
+### Required real-device validation
 
-- Supported input packets: the documented 96-point Cartesian-high packet (data_type=1) and one-sample IMU packet (data_type=0).
-- Both output formats follow the Livox ROS Driver 2 point layout. PointCloud2 uses x/y/z/intensity/tag/line/timestamp fields with the official 26-byte packed point step. Point timing follows the Livox SDK2/ROS Driver 2 calculation: time_interval * 100 / dot_num nanoseconds per point. Points are batched into CustomMsg messages with a uint64 timebase and uint32 relative offset_time.
-- The default line_count=4 follows the official MID360 driver setting. Confirm the T100 channel/ring interpretation with real captures before relying on it.
-- T100 acceleration is documented in g and is converted to m/s² for sensor_msgs/Imu; angular velocity remains rad/s.
-- Device timestamps are forwarded unchanged so point and IMU streams retain their common device time domain. In time_type=0, this is the device's since-startup time, not Unix epoch time.
-- This first bridge milestone has protocol/unit tests but has not been validated against a physical T100. Confirm actual packet destinations, timestamp monotonicity, time-type agreement, point interval behavior, line mapping, and IMU units with real-device PCAPs.
-- The bridge does not implement Livox SDK2 discovery/control emulation, LVX recording, or every Livox ROS Driver 2 configuration feature. It aims to leave downstream ROS consumers unchanged, not every SDK-level integration.
+The driver now implements protocol parsing, ROS conversion, destination configuration, sampling control, and point batching. It has not yet completed closed-loop validation on a physical T100. Capture real PCAPs and verify:
+
+1. Actual destination behavior after writing host_pcl_ip/port and host_imu_ip/port. The protocol notes that configured ports and observed streaming destinations may differ.
+2. Whether time_interval × 100 / dot_num matches the real per-point interval for the firmware revision on your unit.
+3. Whether time_type=0 point and IMU timestamps share one device clock. The driver rejects packets if the two streams use different time_type values.
+4. Whether raw T100 tag values pass FAST-LIO2's Livox filter (tag & 0x30 equals 0x10 or 0x00). The driver does not rewrite tag values.
+5. IMU axis directions, gyro units, acceleration scale, and LiDAR-IMU extrinsics.
+6. Actual packet rate, loss, point density, 10 Hz batching latency, and CPU use on Orange Pi 5B / RDK X5.
+
+If time_interval is zero or the calculated point interval is zero, the driver still publishes the point cloud but all point offsets in that packet are equal. This is not reliable motion deskew. Only set point_interval_fallback_ns after measuring a valid fallback interval.
+
+The repository retains ros2/t100_livox_compat as a Python reference bridge. For high point rates and the primary FAST-LIO2 path, use the native C++ driver above.
